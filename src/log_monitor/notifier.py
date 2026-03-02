@@ -91,6 +91,35 @@ def render_message(template, variables):
     return {"subject": subject, "body": body}
 
 
+def _split_body_pages(body, max_chars=3800):
+    """Split a long body into multiple pages, breaking at newlines.
+
+    Each page fits within Chatbot's ~4096-char description limit.
+    """
+    if len(body) <= max_chars:
+        return [body]
+
+    pages = []
+    lines = body.split("\n")
+    current_page = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > max_chars and current_page:
+            pages.append("\n".join(current_page))
+            current_page = [line]
+            current_len = line_len
+        else:
+            current_page.append(line)
+            current_len += line_len
+
+    if current_page:
+        pages.append("\n".join(current_page))
+
+    return pages
+
+
 def build_chatbot_payload(subject, body, severity, keywords_list=None):
     """Build AWS Chatbot custom notification schema JSON."""
     payload = {
@@ -178,22 +207,33 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
     # ── Slack notification (Chatbot) ──
     slack_topic = resolve_sns_topic(kw_config, monitor_config, global_config)
     if slack_topic:
-        chatbot_json = build_chatbot_payload(
-            rendered["subject"],
-            rendered["body"],
-            severity,
-            keywords_list=[keyword, monitor_config.get("display_name", ""), severity],
-        )
-        chatbot_json = truncate_message(chatbot_json)
-        try:
-            sns_client.publish(
-                TopicArn=slack_topic,
-                Message=chatbot_json,
-                Subject=rendered["subject"][:100],
+        # Split into pages if body exceeds Chatbot's 4096-char description limit
+        pages = _split_body_pages(rendered["body"], max_chars=3800)
+        total_pages = len(pages)
+
+        for page_num, page_body in enumerate(pages, 1):
+            title = rendered["subject"]
+            if total_pages > 1:
+                title = f"{title} ({page_num}/{total_pages})"
+
+            chatbot_json = build_chatbot_payload(
+                title,
+                page_body,
+                severity,
+                keywords_list=[keyword, monitor_config.get("display_name", ""), severity],
             )
-            logger.info("Slack notification sent: topic=%s, keyword=%s", slack_topic, keyword)
-        except Exception:
-            logger.exception("Failed to send Slack notification: topic=%s", slack_topic)
+            try:
+                sns_client.publish(
+                    TopicArn=slack_topic,
+                    Message=chatbot_json,
+                    Subject=title[:100],
+                )
+                logger.info(
+                    "Slack notification sent: topic=%s, keyword=%s, page=%d/%d",
+                    slack_topic, keyword, page_num, total_pages,
+                )
+            except Exception:
+                logger.exception("Failed to send Slack notification: topic=%s", slack_topic)
     else:
         logger.warning(
             "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
