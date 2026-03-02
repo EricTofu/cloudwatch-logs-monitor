@@ -18,6 +18,21 @@ def _resolve_severity(kw_config, monitor_config, global_config):
     )
 
 
+def _get_topic_by_severity(topics_dict, severity):
+    """Case-insensitive lookup in sns_topics dict."""
+    if not topics_dict or not severity:
+        return None
+    # Exact match first
+    if severity in topics_dict:
+        return topics_dict[severity]
+    # Case-insensitive fallback
+    severity_lower = severity.lower()
+    for key, value in topics_dict.items():
+        if key.lower() == severity_lower:
+            return value
+    return None
+
+
 def resolve_sns_topic(kw_config, monitor_config, global_config):
     """Resolve Slack SNS topic: KEYWORD → MONITOR → GLOBAL.
 
@@ -33,8 +48,8 @@ def resolve_sns_topic(kw_config, monitor_config, global_config):
     if monitor_config.get("sns_topic"):
         return monitor_config["sns_topic"]
 
-    # 3. GLOBAL by severity
-    return global_config.get("sns_topics", {}).get(severity)
+    # 3. GLOBAL by severity (case-insensitive)
+    return _get_topic_by_severity(global_config.get("sns_topics", {}), severity)
 
 
 def resolve_email_sns_topic(kw_config, monitor_config, global_config):
@@ -45,8 +60,8 @@ def resolve_email_sns_topic(kw_config, monitor_config, global_config):
     if monitor_config.get("email_sns_topic"):
         return monitor_config["email_sns_topic"]
 
-    # 2. GLOBAL by severity
-    return global_config.get("email_sns_topics", {}).get(severity)
+    # 2. GLOBAL by severity (case-insensitive)
+    return _get_topic_by_severity(global_config.get("email_sns_topics", {}), severity)
 
 
 def resolve_template(monitor_config, global_config, action):
@@ -179,6 +194,10 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
             logger.info("Slack notification sent: topic=%s, keyword=%s", slack_topic, keyword)
         except Exception:
             logger.exception("Failed to send Slack notification: topic=%s", slack_topic)
+    else:
+        logger.warning(
+            "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
+        )
 
     # ── Email notification ──
     email_topic = resolve_email_sns_topic(kw_config, monitor_config, global_config)
@@ -194,3 +213,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
             logger.info("Email notification sent: topic=%s, keyword=%s", email_topic, keyword)
         except Exception:
             logger.exception("Failed to send email notification: topic=%s", email_topic)
+    else:
+        logger.warning(
+            "No Email SNS topic found: severity=%s, keyword=%s", severity, keyword
+        )
