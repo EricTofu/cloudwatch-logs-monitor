@@ -1,10 +1,26 @@
 """DynamoDB configuration reader and state updater."""
 
 import logging
+from decimal import Decimal
 
 from log_monitor.constants import TABLE_NAME, get_dynamodb_resource
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_decimals(obj):
+    """Recursively convert Decimal values from DynamoDB to int/float.
+
+    DynamoDB returns all numbers as decimal.Decimal, which causes
+    TypeError when passed to boto3 APIs that expect int (e.g. start_query).
+    """
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == int(obj) else float(obj)
+    if isinstance(obj, dict):
+        return {k: _convert_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_decimals(i) for i in obj]
+    return obj
 
 
 def _get_table(table=None):
@@ -20,7 +36,7 @@ def get_global_config(table=None):
     item = resp.get("Item")
     if not item:
         raise ValueError("GLOBAL#CONFIG record not found in DynamoDB")
-    return item
+    return _convert_decimals(item)
 
 
 def query_all_projects(table=None):
@@ -37,7 +53,7 @@ def query_all_projects(table=None):
         if "LastEvaluatedKey" not in resp:
             break
         kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-    return items
+    return _convert_decimals(items)
 
 
 def query_all_states(table=None):
@@ -54,7 +70,7 @@ def query_all_states(table=None):
         if "LastEvaluatedKey" not in resp:
             break
         kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-    return items
+    return _convert_decimals(items)
 
 
 def update_project_timestamp(project_sk, timestamp_ms, table=None):
