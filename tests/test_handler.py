@@ -13,27 +13,27 @@ from tests.conftest import SAMPLE_GLOBAL_CONFIG, SAMPLE_PROJECT_A, SAMPLE_PROJEC
 
 class TestShouldSkipProject:
     def test_first_run_no_skip(self):
-        project = {"sk": "project-a"}
+        meta = {}
         defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(project, 1740000000000, defaults) is False
+        assert should_skip_project(meta, 1740000000000, defaults) is False
 
     def test_within_schedule(self):
         now_ms = int(time.time() * 1000)
-        project = {"sk": "project-a", "last_searched_at": now_ms - (2 * 60 * 1000)}
+        meta = {"last_searched_at": now_ms - (2 * 60 * 1000)}
         defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(project, now_ms, defaults) is True
+        assert should_skip_project(meta, now_ms, defaults) is True
 
     def test_past_schedule(self):
         now_ms = int(time.time() * 1000)
-        project = {"sk": "project-a", "last_searched_at": now_ms - (10 * 60 * 1000)}
+        meta = {"last_searched_at": now_ms - (10 * 60 * 1000)}
         defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(project, now_ms, defaults) is False
+        assert should_skip_project(meta, now_ms, defaults) is False
 
     def test_daily_schedule(self):
         now_ms = int(time.time() * 1000)
-        project = {"sk": "project-a", "last_searched_at": now_ms - (60 * 60 * 1000)}
+        meta = {"last_searched_at": now_ms - (60 * 60 * 1000)}
         defaults = {"schedule_rate_minutes": 1440}
-        assert should_skip_project(project, now_ms, defaults) is True
+        assert should_skip_project(meta, now_ms, defaults) is True
 
 
 class TestProcessProject:
@@ -136,8 +136,8 @@ def test_handler_integration(aws_credentials):
     assert "Item" in resp
     assert resp["Item"]["status"] == "ALARM"
 
-    # Verify last_searched_at was updated
-    resp = table.get_item(Key={"pk": "PROJECT", "sk": "project-a"})
+    # Verify last_searched_at was updated on PROJECT_META (not PROJECT)
+    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": "project-a"})
     assert "last_searched_at" in resp["Item"]
 
     reset_clients()

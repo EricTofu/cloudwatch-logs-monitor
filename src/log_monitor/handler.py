@@ -5,10 +5,11 @@ import time
 
 from log_monitor.config import (
     get_global_config,
+    get_project_meta,
     merge_defaults,
     query_all_projects,
     query_all_states,
-    update_project_timestamp,
+    update_project_meta,
     update_state,
 )
 from log_monitor.constants import INGESTION_DELAY_MIN
@@ -35,7 +36,12 @@ def handler(event, context):
     now_ms = int(time.time() * 1000)
     search_end_ms = now_ms - (INGESTION_DELAY_MIN * 60 * 1000)
 
-    # 2. Filter active projects and check schedules
+    # 2. Load PROJECT_META (last_searched_at) separately from config
+    project_metas = {}
+    for project in projects:
+        project_metas[project["sk"]] = get_project_meta(project["sk"])
+
+    # 3. Filter active projects and check schedules
     active_projects = []
     merged_defaults = {}
     for project in projects:
@@ -46,7 +52,8 @@ def handler(event, context):
         defaults = merge_defaults(project, global_config)
         merged_defaults[project["sk"]] = defaults
 
-        if should_skip_project(project, search_end_ms, defaults):
+        meta = project_metas.get(project["sk"], {})
+        if should_skip_project(meta, search_end_ms, defaults):
             logger.info("Skipping project (schedule): %s", project.get("sk"))
             continue
 
@@ -58,12 +65,13 @@ def handler(event, context):
 
     logger.info("Processing %d active projects", len(active_projects))
 
-    # 3. Determine search start per project and execute queries
+    # 4. Determine search start per project and execute queries
     project_search_starts = {}
     for project in active_projects:
         defaults = merged_defaults[project["sk"]]
         search_window_ms = defaults["search_window_minutes"] * 60 * 1000
-        last_searched = project.get("last_searched_at")
+        meta = project_metas.get(project["sk"], {})
+        last_searched = meta.get("last_searched_at")
 
         if last_searched and isinstance(last_searched, (int, float)):
             project_search_starts[project["sk"]] = int(last_searched)
@@ -78,19 +86,18 @@ def handler(event, context):
         search_end_ms,
     )
 
-    # 4. Process each project's results
+    # 5. Process each project's results
     for project in active_projects:
         project_sk = project["sk"]
         try:
             result_data = query_results.get(project_sk)
             if result_data is None:
                 logger.warning("No query results for project %s (query may have failed)", project_sk)
-                # Still update timestamp so we don't re-search the same window
-                update_project_timestamp(project_sk, search_end_ms)
+                update_project_meta(project_sk, search_end_ms)
                 continue
 
             process_project(project, result_data["results"], states, global_config, now_ms)
-            update_project_timestamp(project_sk, search_end_ms)
+            update_project_meta(project_sk, search_end_ms)
 
         except Exception:
             logger.exception("Failed to process project %s", project_sk)
@@ -99,10 +106,14 @@ def handler(event, context):
     logger.info("Log monitor execution complete")
 
 
-def should_skip_project(project, search_end_ms, defaults):
-    """Check if project should be skipped based on schedule_rate_minutes."""
+def should_skip_project(meta, search_end_ms, defaults):
+    """Check if project should be skipped based on schedule_rate_minutes.
+
+    Args:
+        meta: PROJECT_META record (contains last_searched_at).
+    """
     schedule_rate = defaults.get("schedule_rate_minutes", 5)
-    last_searched = project.get("last_searched_at")
+    last_searched = meta.get("last_searched_at")
 
     if not last_searched or not isinstance(last_searched, (int, float)):
         return False  # First run, don't skip

@@ -151,7 +151,13 @@ def send_notification(monitor, project, global_config, action, events, keyword):
     # Build template variables
     from datetime import datetime
 
-    log_lines = "\n".join(e.get("message", "") for e in events[:20])  # max 20 lines
+    # Format log lines: numbered with timestamps for readability
+    log_line_parts = []
+    for i, e in enumerate(events[:20], 1):  # max 20 events
+        ts = e.get("timestamp", "")
+        msg = e.get("message", "").rstrip()
+        log_line_parts.append(f"[{i}] {ts}  {msg}")
+    log_lines = "\n".join(log_line_parts)
     context_all = []
     for e in events[:5]:  # context for first 5 events
         context_all.extend(e.get("context_lines", []))

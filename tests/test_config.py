@@ -6,10 +6,11 @@ from moto import mock_aws
 
 from log_monitor.config import (
     get_global_config,
+    get_project_meta,
     merge_defaults,
     query_all_projects,
     query_all_states,
-    update_project_timestamp,
+    update_project_meta,
     update_state,
 )
 from log_monitor.constants import TABLE_NAME, reset_clients
@@ -118,7 +119,7 @@ def test_query_all_states_empty(aws_credentials):
 
 
 @mock_aws
-def test_update_project_timestamp(aws_credentials):
+def test_update_project_meta(aws_credentials):
     reset_clients()
     dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
     table = dynamodb.create_table(
@@ -133,12 +134,36 @@ def test_update_project_timestamp(aws_credentials):
         ],
         BillingMode="PAY_PER_REQUEST",
     )
-    table.put_item(Item=SAMPLE_PROJECT_A)
 
-    update_project_timestamp("project-a", 1740000000000, table)
+    update_project_meta("project-a", 1740000000000, table)
 
-    resp = table.get_item(Key={"pk": "PROJECT", "sk": "project-a"})
+    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": "project-a"})
     assert resp["Item"]["last_searched_at"] == 1740000000000
+
+    # get_project_meta should return the same
+    meta = get_project_meta("project-a", table)
+    assert meta["last_searched_at"] == 1740000000000
+
+
+@mock_aws
+def test_get_project_meta_missing(aws_credentials):
+    reset_clients()
+    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
+    table = dynamodb.create_table(
+        TableName=TABLE_NAME,
+        KeySchema=[
+            {"AttributeName": "pk", "KeyType": "HASH"},
+            {"AttributeName": "sk", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "pk", "AttributeType": "S"},
+            {"AttributeName": "sk", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+    meta = get_project_meta("nonexistent", table)
+    assert meta == {}
 
 
 @mock_aws

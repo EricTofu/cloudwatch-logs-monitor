@@ -73,11 +73,23 @@ def query_all_states(table=None):
     return _convert_decimals(items)
 
 
-def update_project_timestamp(project_sk, timestamp_ms, table=None):
-    """Update last_searched_at on a PROJECT record."""
+def get_project_meta(project_sk, table=None):
+    """Fetch PROJECT_META record (Lambda-managed, separate from config).
+
+    Stores last_searched_at separately from PROJECT config so that
+    copy-paste of PROJECT records doesn't accidentally overwrite timestamps.
+    """
+    table = _get_table(table)
+    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": project_sk})
+    item = resp.get("Item")
+    return _convert_decimals(item) if item else {}
+
+
+def update_project_meta(project_sk, timestamp_ms, table=None):
+    """Update last_searched_at on a PROJECT_META record."""
     table = _get_table(table)
     table.update_item(
-        Key={"pk": "PROJECT", "sk": project_sk},
+        Key={"pk": "PROJECT_META", "sk": project_sk},
         UpdateExpression="SET last_searched_at = :ts",
         ExpressionAttributeValues={":ts": timestamp_ms},
     )
