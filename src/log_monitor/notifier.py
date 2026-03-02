@@ -91,35 +91,6 @@ def render_message(template, variables):
     return {"subject": subject, "body": body}
 
 
-def _split_body_pages(body, max_chars=3800):
-    """Split a long body into multiple pages, breaking at newlines.
-
-    Each page fits within Chatbot's ~4096-char description limit.
-    """
-    if len(body) <= max_chars:
-        return [body]
-
-    pages = []
-    lines = body.split("\n")
-    current_page = []
-    current_len = 0
-
-    for line in lines:
-        line_len = len(line) + 1  # +1 for newline
-        if current_len + line_len > max_chars and current_page:
-            pages.append("\n".join(current_page))
-            current_page = [line]
-            current_len = line_len
-        else:
-            current_page.append(line)
-            current_len += line_len
-
-    if current_page:
-        pages.append("\n".join(current_page))
-
-    return pages
-
-
 def build_chatbot_payload(subject, body, severity, keywords_list=None):
     """Build AWS Chatbot custom notification schema JSON."""
     payload = {
@@ -172,11 +143,10 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
 
     # Format log lines with timestamps
     log_line_parts = []
-    for i, e in enumerate(events[:20], 1):
+    for i, e in enumerate(events[:50], 1):
         ts = e.get("timestamp", "")
         msg = e.get("message", "").rstrip()
         log_line_parts.append(f"[{i}] {ts}  {msg}")
-    log_lines = "\n".join(log_line_parts)
 
     # Context lines
     context_all = []
@@ -187,7 +157,8 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
     # Stream names
     stream_names = list({e.get("log_stream", "") for e in events})
 
-    variables = {
+    # Base variables (shared across pages)
+    base_variables = {
         "display_name": monitor_config.get("display_name", monitor_config.get("sk", "")),
         "keyword": keyword,
         "severity": severity.upper(),
@@ -195,30 +166,29 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         "detected_at": datetime.now(tz=JST).strftime("%Y-%m-%d %H:%M:%S JST"),
         "log_group": monitor_config.get("log_group", ""),
         "stream_name": ", ".join(stream_names[:3]),
-        "log_lines": log_lines,
-        "context_lines": context_text,
         "mention": monitor_config.get("mention", kw_config.get("mention", "")),
     }
 
-    # Resolve and render template
     template = resolve_template(monitor_config, global_config, action)
-    rendered = render_message(template, variables)
 
-    # ── Slack notification (Chatbot) ──
+    # ── Slack notification (Chatbot) — paginate log lines ──
     slack_topic = resolve_sns_topic(kw_config, monitor_config, global_config)
     if slack_topic:
-        # Split into pages if body exceeds Chatbot's 4096-char description limit
-        pages = _split_body_pages(rendered["body"], max_chars=3800)
-        total_pages = len(pages)
+        # Split log_lines into pages that fit within Chatbot's 4096-char limit
+        log_pages = _split_log_lines_pages(log_line_parts, context_text, template, base_variables)
+        total_pages = len(log_pages)
 
-        for page_num, page_body in enumerate(pages, 1):
+        for page_num, (page_log_lines, page_context) in enumerate(log_pages, 1):
+            variables = {**base_variables, "log_lines": page_log_lines, "context_lines": page_context}
+            rendered = render_message(template, variables)
+
             title = rendered["subject"]
             if total_pages > 1:
                 title = f"{title} ({page_num}/{total_pages})"
 
             chatbot_json = build_chatbot_payload(
                 title,
-                page_body,
+                rendered["body"],
                 severity,
                 keywords_list=[keyword, monitor_config.get("display_name", ""), severity],
             )
@@ -239,9 +209,15 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
             "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
         )
 
-    # ── Email notification ──
+    # ── Email notification (single message, truncated if needed) ──
     email_topic = resolve_email_sns_topic(kw_config, monitor_config, global_config)
     if email_topic:
+        variables = {
+            **base_variables,
+            "log_lines": "\n".join(log_line_parts),
+            "context_lines": context_text,
+        }
+        rendered = render_message(template, variables)
         email_text = build_email_payload(rendered["subject"], rendered["body"])
         email_text = truncate_message(email_text)
         try:
@@ -257,3 +233,47 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         logger.warning(
             "No Email SNS topic found: severity=%s, keyword=%s", severity, keyword
         )
+
+
+def _split_log_lines_pages(log_line_parts, context_text, template, base_variables):
+    """Split log lines into pages that fit within Chatbot's description limit.
+
+    Returns list of (log_lines_str, context_str) tuples.
+    Page 1 includes context, subsequent pages have log lines only.
+    """
+    max_desc = 3800  # Chatbot limit is 4096, leave room for JSON wrapper
+
+    # Estimate header size (template with empty log_lines/context)
+    test_vars = {**base_variables, "log_lines": "", "context_lines": ""}
+    test_rendered = render_message(template, test_vars)
+    header_size = len(test_rendered["body"])
+
+    available = max_desc - header_size
+    if available < 200:
+        available = 2000  # fallback
+
+    pages = []
+    current_lines = []
+    current_len = 0
+
+    for line in log_line_parts:
+        line_len = len(line) + 1
+        if current_len + line_len > available and current_lines:
+            # First page gets context, rest don't
+            ctx = context_text if not pages else "(see page 1)"
+            pages.append(("\n".join(current_lines), ctx))
+            current_lines = [line]
+            current_len = line_len
+        else:
+            current_lines.append(line)
+            current_len += line_len
+
+    if current_lines:
+        ctx = context_text if not pages else "(see page 1)"
+        pages.append(("\n".join(current_lines), ctx))
+
+    if not pages:
+        pages.append(("(no log lines)", context_text))
+
+    return pages
+
