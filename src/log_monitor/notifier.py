@@ -209,17 +209,16 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
             "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
         )
 
-    # ── Email notification (single message, truncated if needed) ──
+    # ── Email notification (full content, no truncation) ──
     email_topic = resolve_email_sns_topic(kw_config, monitor_config, global_config)
     if email_topic:
         variables = {
             **base_variables,
-            "log_lines": "\n".join(log_line_parts),
+            "log_lines": "\n\n".join(log_line_parts),
             "context_lines": context_text,
         }
         rendered = render_message(template, variables)
         email_text = build_email_payload(rendered["subject"], rendered["body"])
-        email_text = truncate_message(email_text)
         try:
             sns_client.publish(
                 TopicArn=email_topic,
