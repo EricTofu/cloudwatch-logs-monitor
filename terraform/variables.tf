@@ -9,26 +9,16 @@ variable "aws_region" {
   default     = "ap-northeast-1"
 }
 
-variable "lambda_timeout" {
-  description = "Lambda function timeout in seconds"
-  type        = number
-  default     = 600 # 10 minutes
-}
-
-variable "lambda_memory" {
-  description = "Lambda function memory in MB"
-  type        = number
-  default     = 512
-}
-
-variable "schedule_rate" {
-  description = "EventBridge schedule rate"
-  type        = string
-  default     = "rate(5 minutes)"
-}
-
-variable "table_name" {
-  description = "DynamoDB table name"
-  type        = string
-  default     = "log-monitor"
+variable "schedules" {
+  description = "EventBridge schedule definitions. Each schedule triggers Lambda with a list of monitor_ids."
+  type = map(object({
+    schedule_expression = string
+    monitor_ids         = list(string)
+  }))
+  default = {
+    "5min" = {
+      schedule_expression = "rate(5 minutes)"
+      monitor_ids         = ["project-a"]
+    }
+  }
 }

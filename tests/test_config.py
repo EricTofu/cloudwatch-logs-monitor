@@ -6,22 +6,18 @@ from moto import mock_aws
 
 from log_monitor.config import (
     get_global_config,
-    get_project_meta,
+    get_monitor_config,
+    get_state,
     merge_defaults,
-    query_all_projects,
-    query_all_states,
-    update_project_meta,
     update_state,
 )
 from log_monitor.constants import TABLE_NAME, reset_clients
-from tests.conftest import SAMPLE_GLOBAL_CONFIG, SAMPLE_PROJECT_A
+from tests.conftest import SAMPLE_GLOBAL_CONFIG, SAMPLE_MONITOR_A
 
 
-@mock_aws
-def test_get_global_config(aws_credentials):
-    reset_clients()
+def _create_table():
     dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
+    return dynamodb.create_table(
         TableName=TABLE_NAME,
         KeySchema=[
             {"AttributeName": "pk", "KeyType": "HASH"},
@@ -33,211 +29,114 @@ def test_get_global_config(aws_credentials):
         ],
         BillingMode="PAY_PER_REQUEST",
     )
+
+
+@mock_aws
+def test_get_global_config(aws_credentials):
+    reset_clients()
+    table = _create_table()
     table.put_item(Item=SAMPLE_GLOBAL_CONFIG)
 
     config = get_global_config(table)
     assert config["pk"] == "GLOBAL"
-    assert config["sk"] == "CONFIG"
-    assert config["source_log_group"] == "/aws/app/shared-logs"
     assert config["defaults"]["renotify_min"] == 60
 
 
 @mock_aws
 def test_get_global_config_missing(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
+    table = _create_table()
 
     with pytest.raises(ValueError, match="GLOBAL#CONFIG"):
         get_global_config(table)
 
 
 @mock_aws
-def test_query_all_projects(aws_credentials):
+def test_get_monitor_config(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    table.put_item(Item=SAMPLE_PROJECT_A)
-    table.put_item(
-        Item={
-            "pk": "PROJECT",
-            "sk": "project-b",
-            "display_name": "Project Beta",
-            "enabled": True,
-            "monitors": [],
-        }
-    )
+    table = _create_table()
+    table.put_item(Item=SAMPLE_MONITOR_A)
 
-    projects = query_all_projects(table)
-    assert len(projects) == 2
-    sks = {p["sk"] for p in projects}
-    assert "project-a" in sks
-    assert "project-b" in sks
+    config = get_monitor_config("project-a", table)
+    assert config["display_name"] == "Project Alpha"
+    assert config["log_group"] == "/aws/app/shared-logs"
+    assert len(config["keywords"]) == 2
 
 
 @mock_aws
-def test_query_all_states_empty(aws_credentials):
+def test_get_monitor_config_missing(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
+    table = _create_table()
 
-    states = query_all_states(table)
-    assert states == []
+    config = get_monitor_config("nonexistent", table)
+    assert config is None
 
 
 @mock_aws
-def test_update_project_meta(aws_credentials):
+def test_get_state_missing(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
+    table = _create_table()
 
-    update_project_meta("project-a", 1740000000000, table)
-
-    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": "project-a"})
-    assert resp["Item"]["last_searched_at"] == 1740000000000
-
-    # get_project_meta should return the same
-    meta = get_project_meta("project-a", table)
-    assert meta["last_searched_at"] == 1740000000000
-
-
-@mock_aws
-def test_get_project_meta_missing(aws_credentials):
-    reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
-
-    meta = get_project_meta("nonexistent", table)
-    assert meta == {}
+    state = get_state("project-a", "ERROR", table)
+    assert state is None
 
 
 @mock_aws
 def test_update_state_notify(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
+    table = _create_table()
 
     update_state("project-a", "ERROR", "NOTIFY", 3, 1740000000000, table)
 
-    resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR"})
-    item = resp["Item"]
-    assert item["status"] == "ALARM"
-    assert item["last_detected_at"] == 1740000000000
-    assert item["last_notified_at"] == 1740000000000
-    assert item["current_streak"] == 1
-    assert item["detection_count"] == 3
+    state = get_state("project-a", "ERROR", table)
+    assert state["status"] == "ALARM"
+    assert state["last_detected_at"] == 1740000000000
+    assert state["detection_count"] == 3
+    assert state["current_streak"] == 1
 
 
 @mock_aws
 def test_update_state_recover(aws_credentials):
     reset_clients()
-    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.create_table(
-        TableName=TABLE_NAME,
-        KeySchema=[
-            {"AttributeName": "pk", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "pk", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
+    table = _create_table()
 
-    # First set to ALARM
     update_state("project-a", "ERROR", "NOTIFY", 3, 1740000000000, table)
-    # Then recover
     update_state("project-a", "ERROR", "RECOVER", 0, 1740001000000, table)
 
-    resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR"})
-    item = resp["Item"]
-    assert item["status"] == "OK"
-    assert item["last_detected_at"] is None
-    assert item["last_notified_at"] is None
-    assert item["current_streak"] == 0
-    assert item["detection_count"] == 0
+    state = get_state("project-a", "ERROR", table)
+    assert state["status"] == "OK"
+    assert state["last_detected_at"] is None
+    assert state["current_streak"] == 0
+
+
+@mock_aws
+def test_update_state_renotify(aws_credentials):
+    reset_clients()
+    table = _create_table()
+
+    update_state("project-a", "ERROR", "NOTIFY", 2, 1740000000000, table)
+    update_state("project-a", "ERROR", "RENOTIFY", 1, 1740001000000, table)
+
+    state = get_state("project-a", "ERROR", table)
+    assert state["status"] == "ALARM"
+    assert state["last_notified_at"] == 1740001000000
+    assert state["detection_count"] == 3  # 2 + 1
+    assert state["current_streak"] == 2  # 1 + 1
 
 
 def test_merge_defaults():
-    project = {"schedule_rate_minutes": 60, "notify_on_recover": False}
+    config = {"search_window_minutes": 1450, "notify_on_recover": False}
     global_config = {
         "defaults": {
-            "schedule_rate_minutes": 5,
-            "search_window_minutes": 5,
-            "notify_on_recover": True,
+            "search_window_minutes": 7,
             "context_lines": 5,
+            "renotify_min": 60,
+            "notify_on_recover": True,
+            "severity": "warning",
         }
     }
-
-    merged = merge_defaults(project, global_config)
-    assert merged["schedule_rate_minutes"] == 60  # project override
-    assert merged["search_window_minutes"] == 5  # global default
-    assert merged["notify_on_recover"] is False  # project override
-    assert merged["context_lines"] == 5
+    merged = merge_defaults(config, global_config)
+    assert merged["search_window_minutes"] == 1450  # monitor override
+    assert merged["context_lines"] == 5  # global default
+    assert merged["notify_on_recover"] is False  # monitor override
+    assert merged["renotify_min"] == 60

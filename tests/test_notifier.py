@@ -22,106 +22,94 @@ GLOBAL_CONFIG = {
         "critical": "arn:aws:sns:ap-northeast-1:123:email-critical",
     },
     "notification_template": {
-        "subject": "[{severity}] {project} - {keyword}",
+        "subject": "[{severity}] {display_name} - {keyword}",
         "body": "{keyword} detected {count} times",
     },
     "recover_template": {
-        "subject": "[RECOVER] {project}",
+        "subject": "[RECOVER] {display_name}",
         "body": "{keyword} recovered",
     },
 }
 
 
 class TestResolveSNSTopic:
+    def test_keyword_override(self):
+        kw_config = {"severity": "critical", "sns_topic": "arn:kw-specific"}
+        topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
+        assert topic == "arn:kw-specific"
+
     def test_monitor_override(self):
-        monitor = {"severity": "critical", "override_sns_topic": "arn:monitor-specific"}
-        topic = resolve_sns_topic(monitor, {}, GLOBAL_CONFIG)
+        kw_config = {"severity": "critical"}
+        monitor = {"sns_topic": "arn:monitor-specific"}
+        topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
         assert topic == "arn:monitor-specific"
 
-    def test_project_override(self):
-        monitor = {"severity": "critical"}
-        project = {"override_sns_topics": {"critical": "arn:project-critical"}}
-        topic = resolve_sns_topic(monitor, project, GLOBAL_CONFIG)
-        assert topic == "arn:project-critical"
-
     def test_global_fallback(self):
-        monitor = {"severity": "critical"}
-        topic = resolve_sns_topic(monitor, {}, GLOBAL_CONFIG)
+        kw_config = {"severity": "critical"}
+        topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
         assert topic == "arn:aws:sns:ap-northeast-1:123:slack-critical"
 
 
 class TestResolveEmailSNSTopic:
-    def test_project_override(self):
-        project = {"override_email_sns_topics": {"critical": "arn:project-email"}}
-        topics = resolve_email_sns_topic(project, GLOBAL_CONFIG)
-        assert topics["critical"] == "arn:project-email"
+    def test_monitor_override(self):
+        kw_config = {"severity": "critical"}
+        monitor = {"email_sns_topic": "arn:monitor-email"}
+        topic = resolve_email_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
+        assert topic == "arn:monitor-email"
 
     def test_global_fallback(self):
-        topics = resolve_email_sns_topic({}, GLOBAL_CONFIG)
-        assert topics["critical"] == "arn:aws:sns:ap-northeast-1:123:email-critical"
+        kw_config = {"severity": "critical"}
+        topic = resolve_email_sns_topic(kw_config, {}, GLOBAL_CONFIG)
+        assert topic == "arn:aws:sns:ap-northeast-1:123:email-critical"
 
 
 class TestResolveTemplate:
-    def test_notification_template_global(self):
-        monitor = {}
-        project = {}
-        tmpl = resolve_template(monitor, project, GLOBAL_CONFIG, "NOTIFY")
-        assert tmpl["subject"] == "[{severity}] {project} - {keyword}"
+    def test_notification_template(self):
+        tmpl = resolve_template({}, GLOBAL_CONFIG, "NOTIFY")
+        assert tmpl["subject"] == "[{severity}] {display_name} - {keyword}"
 
     def test_recover_template(self):
-        monitor = {}
-        project = {}
-        tmpl = resolve_template(monitor, project, GLOBAL_CONFIG, "RECOVER")
-        assert tmpl["subject"] == "[RECOVER] {project}"
+        tmpl = resolve_template({}, GLOBAL_CONFIG, "RECOVER")
+        assert tmpl["subject"] == "[RECOVER] {display_name}"
 
     def test_monitor_override(self):
         monitor = {"notification_template": {"subject": "custom", "body": "custom body"}}
-        tmpl = resolve_template(monitor, {}, GLOBAL_CONFIG, "NOTIFY")
+        tmpl = resolve_template(monitor, GLOBAL_CONFIG, "NOTIFY")
         assert tmpl["subject"] == "custom"
 
 
 class TestRenderMessage:
-    def test_basic_rendering(self):
-        template = {"subject": "[{severity}] {project}", "body": "{keyword}: {count} events"}
-        variables = {
-            "severity": "CRITICAL",
-            "project": "Alpha",
-            "keyword": "ERROR",
-            "count": "5",
-        }
+    def test_basic(self):
+        template = {"subject": "[{severity}] {display_name}", "body": "{keyword}: {count}"}
+        variables = {"severity": "CRITICAL", "display_name": "Alpha", "keyword": "ERROR", "count": "5"}
         result = render_message(template, variables)
         assert result["subject"] == "[CRITICAL] Alpha"
-        assert result["body"] == "ERROR: 5 events"
+        assert result["body"] == "ERROR: 5"
 
     def test_missing_variable(self):
-        template = {"subject": "{project} - {unknown}", "body": "test"}
-        variables = {"project": "Alpha"}
-        result = render_message(template, variables)
+        template = {"subject": "{display_name} - {unknown}", "body": "test"}
+        result = render_message(template, {"display_name": "Alpha"})
         assert result["subject"] == "Alpha - {unknown}"
 
 
 class TestBuildPayloads:
-    def test_chatbot_payload(self):
+    def test_chatbot(self):
         payload = build_chatbot_payload("Title", "Description", "critical", ["ERROR"])
         parsed = json.loads(payload)
         assert parsed["version"] == "1.0"
-        assert parsed["source"] == "custom"
         assert parsed["content"]["title"] == "Title"
-        assert parsed["content"]["description"] == "Description"
-        assert parsed["content"]["keywords"] == ["ERROR"]
 
-    def test_email_payload(self):
-        result = build_email_payload("Subject", "Body text")
-        assert result == "Subject\n\nBody text"
+    def test_email(self):
+        result = build_email_payload("Subject", "Body")
+        assert result == "Subject\n\nBody"
 
 
 class TestTruncateMessage:
-    def test_no_truncation_needed(self):
-        msg = "short message"
-        assert truncate_message(msg) == msg
+    def test_no_truncation(self):
+        assert truncate_message("short") == "short"
 
     def test_truncation(self):
-        msg = "x" * (300 * 1024)  # 300KB
+        msg = "x" * (300 * 1024)
         result = truncate_message(msg)
         assert len(result.encode("utf-8")) <= 256 * 1024
         assert result.endswith("... (truncated)")

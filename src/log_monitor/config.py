@@ -9,11 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def _convert_decimals(obj):
-    """Recursively convert Decimal values from DynamoDB to int/float.
-
-    DynamoDB returns all numbers as decimal.Decimal, which causes
-    TypeError when passed to boto3 APIs that expect int (e.g. start_query).
-    """
+    """Recursively convert Decimal values from DynamoDB to int/float."""
     if isinstance(obj, Decimal):
         return int(obj) if obj == int(obj) else float(obj)
     if isinstance(obj, dict):
@@ -39,66 +35,31 @@ def get_global_config(table=None):
     return _convert_decimals(item)
 
 
-def query_all_projects(table=None):
-    """Query all pk=PROJECT records with pagination."""
-    table = _get_table(table)
-    items = []
-    kwargs = {
-        "KeyConditionExpression": "pk = :pk",
-        "ExpressionAttributeValues": {":pk": "PROJECT"},
-    }
-    while True:
-        resp = table.query(**kwargs)
-        items.extend(resp.get("Items", []))
-        if "LastEvaluatedKey" not in resp:
-            break
-        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-    return _convert_decimals(items)
+def get_monitor_config(monitor_id, table=None):
+    """Fetch a single MONITOR record by its ID.
 
-
-def query_all_states(table=None):
-    """Query all pk=STATE records with pagination."""
-    table = _get_table(table)
-    items = []
-    kwargs = {
-        "KeyConditionExpression": "pk = :pk",
-        "ExpressionAttributeValues": {":pk": "STATE"},
-    }
-    while True:
-        resp = table.query(**kwargs)
-        items.extend(resp.get("Items", []))
-        if "LastEvaluatedKey" not in resp:
-            break
-        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-    return _convert_decimals(items)
-
-
-def get_project_meta(project_sk, table=None):
-    """Fetch PROJECT_META record (Lambda-managed, separate from config).
-
-    Stores last_searched_at separately from PROJECT config so that
-    copy-paste of PROJECT records doesn't accidentally overwrite timestamps.
+    Returns:
+        Monitor config dict, or None if not found.
     """
     table = _get_table(table)
-    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": project_sk})
+    resp = table.get_item(Key={"pk": "MONITOR", "sk": monitor_id})
     item = resp.get("Item")
-    return _convert_decimals(item) if item else {}
+    return _convert_decimals(item) if item else None
 
 
-def update_project_meta(project_sk, timestamp_ms, table=None):
-    """Update last_searched_at on a PROJECT_META record."""
+def get_state(monitor_id, keyword, table=None):
+    """Fetch STATE record for a monitor#keyword combination."""
     table = _get_table(table)
-    table.update_item(
-        Key={"pk": "PROJECT_META", "sk": project_sk},
-        UpdateExpression="SET last_searched_at = :ts",
-        ExpressionAttributeValues={":ts": timestamp_ms},
-    )
+    sk = f"{monitor_id}#{keyword}"
+    resp = table.get_item(Key={"pk": "STATE", "sk": sk})
+    item = resp.get("Item")
+    return _convert_decimals(item) if item else None
 
 
-def update_state(project_sk, keyword, action, count, now_ms, table=None):
+def update_state(monitor_id, keyword, action, count, now_ms, table=None):
     """Create or update a STATE record based on the action."""
     table = _get_table(table)
-    sk = f"{project_sk}#{keyword}"
+    sk = f"{monitor_id}#{keyword}"
 
     if action == "NOTIFY":
         table.update_item(
@@ -167,26 +128,28 @@ def update_state(project_sk, keyword, action, count, now_ms, table=None):
     # NOOP: do nothing
 
 
-def merge_defaults(project, global_config):
-    """Merge PROJECT fields with GLOBAL defaults for convenience.
+def merge_defaults(config, global_config):
+    """Merge MONITOR fields with GLOBAL defaults.
 
-    Returns a dict with resolved values for schedule_rate_minutes,
-    search_window_minutes, notify_on_recover, and context_lines.
+    Returns a new dict with resolved values, preferring MONITOR values
+    over GLOBAL defaults.
     """
     defaults = global_config.get("defaults", {})
     return {
-        "schedule_rate_minutes": (
-            project.get("schedule_rate_minutes")
-            or defaults.get("schedule_rate_minutes", 5)
-        ),
         "search_window_minutes": (
-            project.get("search_window_minutes")
-            or defaults.get("search_window_minutes", 5)
+            config.get("search_window_minutes")
+            or defaults.get("search_window_minutes", 7)
         ),
+        "context_lines": (
+            config.get("context_lines")
+            if config.get("context_lines") is not None
+            else defaults.get("context_lines", 5)
+        ),
+        "renotify_min": defaults.get("renotify_min", 60),
         "notify_on_recover": (
-            project.get("notify_on_recover")
-            if project.get("notify_on_recover") is not None
+            config.get("notify_on_recover")
+            if config.get("notify_on_recover") is not None
             else defaults.get("notify_on_recover", True)
         ),
-        "context_lines": defaults.get("context_lines", 5),
+        "severity": defaults.get("severity", "warning"),
     }

@@ -1,4 +1,4 @@
-"""State transition logic for keyword monitoring."""
+"""State transition logic for monitor keyword tracking."""
 
 import logging
 import time
@@ -6,42 +6,24 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def find_state(states, project_sk, keyword):
-    """Lookup STATE record for a project#keyword combination.
-
-    Args:
-        states: List of all STATE records from DynamoDB.
-        project_sk: Project sort key (e.g., "project-a").
-        keyword: Keyword string (e.g., "ERROR").
-
-    Returns:
-        The matching STATE dict, or None if not found.
-    """
-    target_sk = f"{project_sk}#{keyword}"
-    for state in states:
-        if state.get("sk") == target_sk:
-            return state
-    return None
-
-
-def resolve_renotify_min(monitor, defaults):
+def resolve_renotify_min(kw_config, defaults):
     """Resolve renotify_min with fallback logic.
 
     - Explicit value → use it
     - "disabled" → None (no re-notification)
     - Key absent → fallback to GLOBAL defaults
     """
-    if "renotify_min" in monitor:
-        value = monitor["renotify_min"]
+    if "renotify_min" in kw_config:
+        value = kw_config["renotify_min"]
         if value == "disabled":
             return None
         return value
     return defaults.get("renotify_min")
 
 
-def resolve_notify_on_recover(project, defaults):
-    """Resolve notify_on_recover with PROJECT → GLOBAL fallback."""
-    value = project.get("notify_on_recover")
+def resolve_notify_on_recover(config, defaults):
+    """Resolve notify_on_recover with MONITOR → GLOBAL fallback."""
+    value = config.get("notify_on_recover")
     if value is not None:
         return value
     return defaults.get("notify_on_recover", True)
@@ -53,15 +35,15 @@ def _minutes_since(epoch_ms):
     return (now_ms - epoch_ms) / (60 * 1000)
 
 
-def evaluate_state(state, count, monitor, project, global_config):
+def evaluate_state(state, count, kw_config, monitor_config, global_config):
     """Evaluate state transition and return the action to take.
 
     Args:
         state: Current STATE record (or None for first detection).
-        count: Number of detected events (after exclusions).
-        monitor: Monitor dict from project config.
-        project: Project dict from DynamoDB.
-        global_config: GLOBAL config dict from DynamoDB.
+        count: Number of detected events for this keyword.
+        kw_config: Keyword group config dict (has renotify_min, severity).
+        monitor_config: MONITOR config dict (has notify_on_recover).
+        global_config: GLOBAL config dict.
 
     Returns:
         One of: "NOTIFY", "RENOTIFY", "SUPPRESS",
@@ -70,8 +52,8 @@ def evaluate_state(state, count, monitor, project, global_config):
     defaults = global_config.get("defaults", {})
     status = state.get("status", "OK") if state else "OK"
 
-    renotify = resolve_renotify_min(monitor, defaults)
-    notify_on_recover = resolve_notify_on_recover(project, defaults)
+    renotify = resolve_renotify_min(kw_config, defaults)
+    notify_on_recover = resolve_notify_on_recover(monitor_config, defaults)
 
     if count > 0:
         if status == "OK":

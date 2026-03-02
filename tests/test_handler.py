@@ -1,59 +1,30 @@
 """Tests for handler.py — Lambda entry point (integration test)."""
 
-import time
 from unittest.mock import MagicMock, patch
 
 import boto3
 from moto import mock_aws
 
 from log_monitor.constants import TABLE_NAME, reset_clients
-from log_monitor.handler import handler, process_project, should_skip_project
-from tests.conftest import SAMPLE_GLOBAL_CONFIG, SAMPLE_PROJECT_A, SAMPLE_PROJECT_B
+from log_monitor.handler import handler, process_monitor
+from tests.conftest import SAMPLE_GLOBAL_CONFIG, SAMPLE_MONITOR_A, SAMPLE_MONITOR_DAILY
 
 
-class TestShouldSkipProject:
-    def test_first_run_no_skip(self):
-        meta = {}
-        defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(meta, 1740000000000, defaults) is False
-
-    def test_within_schedule(self):
-        now_ms = int(time.time() * 1000)
-        meta = {"last_searched_at": now_ms - (2 * 60 * 1000)}
-        defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(meta, now_ms, defaults) is True
-
-    def test_past_schedule(self):
-        now_ms = int(time.time() * 1000)
-        meta = {"last_searched_at": now_ms - (10 * 60 * 1000)}
-        defaults = {"schedule_rate_minutes": 5}
-        assert should_skip_project(meta, now_ms, defaults) is False
-
-    def test_daily_schedule(self):
-        now_ms = int(time.time() * 1000)
-        meta = {"last_searched_at": now_ms - (60 * 60 * 1000)}
-        defaults = {"schedule_rate_minutes": 1440}
-        assert should_skip_project(meta, now_ms, defaults) is True
-
-
-class TestProcessProject:
-    def test_process_with_no_results(self):
-        """No Insights results → all keywords get NOOP or stay in current state."""
-        project = SAMPLE_PROJECT_A.copy()
-        raw_results = []  # no matches
-        states = []
-        global_config = SAMPLE_GLOBAL_CONFIG.copy()
-        now_ms = int(time.time() * 1000)
-
-        # Should not raise
-        with patch("log_monitor.handler.update_state") as mock_update:
-            process_project(project, raw_results, states, global_config, now_ms)
-            # NOOP actions should NOT call update_state
+class TestProcessMonitor:
+    def test_no_results(self):
+        """No Insights results → all keywords get NOOP."""
+        with (
+            patch("log_monitor.handler.get_monitor_config", return_value=SAMPLE_MONITOR_A),
+            patch("log_monitor.handler.get_global_config", return_value=SAMPLE_GLOBAL_CONFIG),
+            patch("log_monitor.handler.execute_query", return_value=[]),
+            patch("log_monitor.handler.update_state") as mock_update,
+            patch("log_monitor.handler.get_state", return_value=None),
+        ):
+            process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
             mock_update.assert_not_called()
 
-    def test_process_with_matches(self):
-        """Insights results with keyword matches → should trigger NOTIFY."""
-        project = SAMPLE_PROJECT_A.copy()
+    def test_with_matches(self):
+        """Results with keyword matches → should trigger NOTIFY."""
         raw_results = [
             [
                 {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
@@ -61,20 +32,52 @@ class TestProcessProject:
                 {"field": "@logStream", "value": "project-a/stream-1"},
             ],
         ]
-        states = []
-        global_config = SAMPLE_GLOBAL_CONFIG.copy()
-        now_ms = int(time.time() * 1000)
-
         with (
+            patch("log_monitor.handler.get_monitor_config", return_value=SAMPLE_MONITOR_A),
+            patch("log_monitor.handler.execute_query", return_value=raw_results),
             patch("log_monitor.handler.send_notification") as mock_notify,
             patch("log_monitor.handler.update_state") as mock_update,
-            patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, p, g: e),
+            patch("log_monitor.handler.get_state", return_value=None),
+            patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, c, g: e),
         ):
-            process_project(project, raw_results, states, global_config, now_ms)
-
-            # ERROR keyword should trigger NOTIFY
+            process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
             mock_notify.assert_called()
             mock_update.assert_called()
+
+    def test_monitor_level_no_keywords(self):
+        """Monitor without keywords → _all tracking."""
+        raw_results = [
+            [
+                {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
+                {"field": "@message", "value": "ERROR in daily scan"},
+                {"field": "@logStream", "value": "stream-1"},
+            ],
+        ]
+        with (
+            patch("log_monitor.handler.get_monitor_config", return_value=SAMPLE_MONITOR_DAILY),
+            patch("log_monitor.handler.execute_query", return_value=raw_results),
+            patch("log_monitor.handler.send_notification") as mock_notify,
+            patch("log_monitor.handler.update_state") as mock_update,
+            patch("log_monitor.handler.get_state", return_value=None),
+            patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, c, g: e),
+        ):
+            process_monitor("project-c-daily", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
+            mock_notify.assert_called()
+            # STATE should use "_all" as keyword
+            mock_update.assert_called_once()
+            call_args = mock_update.call_args
+            assert call_args[0][0] == "project-c-daily"  # monitor_id
+            assert call_args[0][1] == "_all"  # keyword
+
+    def test_disabled_monitor(self):
+        """Disabled monitor should be skipped."""
+        disabled_config = {**SAMPLE_MONITOR_A, "enabled": False}
+        with (
+            patch("log_monitor.handler.get_monitor_config", return_value=disabled_config),
+            patch("log_monitor.handler.execute_query") as mock_query,
+        ):
+            process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
+            mock_query.assert_not_called()
 
 
 @mock_aws
@@ -82,7 +85,6 @@ def test_handler_integration(aws_credentials):
     """Full integration test with moto DynamoDB + mocked Logs Insights."""
     reset_clients()
 
-    # Set up DynamoDB
     dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
     table = dynamodb.create_table(
         TableName=TABLE_NAME,
@@ -97,55 +99,47 @@ def test_handler_integration(aws_credentials):
         BillingMode="PAY_PER_REQUEST",
     )
     table.put_item(Item=SAMPLE_GLOBAL_CONFIG)
-    table.put_item(Item=SAMPLE_PROJECT_A)
+    table.put_item(Item=SAMPLE_MONITOR_A)
 
     # Set up SNS topics
     sns = boto3.client("sns", region_name="ap-northeast-1")
-    for name in ["slack-critical", "slack-warning", "slack-info", "email-critical", "email-alerts"]:
+    for name in ["slack-critical", "slack-warning", "email-critical", "email-alerts"]:
         sns.create_topic(Name=name)
 
-    # Mock Logs Insights (moto doesn't emulate actual query execution)
-    mock_start_query = MagicMock(return_value={"queryId": "test-query-id-1"})
-    mock_get_results = MagicMock(
-        return_value={
-            "status": "Complete",
-            "results": [
-                [
-                    {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
-                    {"field": "@message", "value": "ERROR: test error"},
-                    {"field": "@logStream", "value": "project-a/stream-1"},
-                ],
+    mock_start_query = MagicMock(return_value={"queryId": "test-query-id"})
+    mock_get_results = MagicMock(return_value={
+        "status": "Complete",
+        "results": [
+            [
+                {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
+                {"field": "@message", "value": "ERROR: test error"},
+                {"field": "@logStream", "value": "project-a/stream-1"},
             ],
-        }
-    )
+        ],
+    })
 
     with (
         patch("log_monitor.query.get_logs_client") as mock_logs_client,
-        patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, p, g: e),
+        patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, c, g: e),
     ):
         mock_client = MagicMock()
         mock_client.start_query = mock_start_query
         mock_client.get_query_results = mock_get_results
         mock_logs_client.return_value = mock_client
 
-        # Run handler
-        handler({}, None)
+        handler({"monitor_ids": ["project-a"]}, None)
 
-    # Verify STATE was created
+    # Verify STATE was created for ERROR keyword
     resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR"})
     assert "Item" in resp
     assert resp["Item"]["status"] == "ALARM"
-
-    # Verify last_searched_at was updated on PROJECT_META (not PROJECT)
-    resp = table.get_item(Key={"pk": "PROJECT_META", "sk": "project-a"})
-    assert "last_searched_at" in resp["Item"]
 
     reset_clients()
 
 
 @mock_aws
 def test_handler_error_isolation(aws_credentials):
-    """One project failing should not affect other projects."""
+    """One monitor failing should not affect others."""
     reset_clients()
 
     dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
@@ -162,37 +156,18 @@ def test_handler_error_isolation(aws_credentials):
         BillingMode="PAY_PER_REQUEST",
     )
     table.put_item(Item=SAMPLE_GLOBAL_CONFIG)
-    table.put_item(Item=SAMPLE_PROJECT_A)
-    table.put_item(Item=SAMPLE_PROJECT_B)
+    table.put_item(Item=SAMPLE_MONITOR_A)
+    table.put_item(Item=SAMPLE_MONITOR_DAILY)
 
-    sns = boto3.client("sns", region_name="ap-northeast-1")
-    for name in ["slack-critical", "slack-warning", "slack-info", "email-critical", "email-alerts"]:
-        sns.create_topic(Name=name)
-
-    call_count = {"start_query": 0}
-
-    def mock_start_query(**kwargs):
-        call_count["start_query"] += 1
-        return {"queryId": f"query-{call_count['start_query']}"}
-
-    def mock_get_results(**kwargs):
-        qid = kwargs.get("queryId", "")
-        if qid == "query-1":
-            # First project returns results that will cause an error in processing
-            return {"status": "Complete", "results": []}
-        else:
-            return {"status": "Complete", "results": []}
-
-    with (
-        patch("log_monitor.query.get_logs_client") as mock_logs_client,
-        patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, p, g: e),
-    ):
-        mock_client = MagicMock()
-        mock_client.start_query = mock_start_query
-        mock_client.get_query_results = mock_get_results
-        mock_logs_client.return_value = mock_client
-
-        # Should not raise even if processing fails for one project
-        handler({}, None)
+    with patch("log_monitor.handler.process_monitor") as mock_process:
+        mock_process.side_effect = [Exception("boom"), None]
+        # Should not raise even if first monitor fails
+        handler({"monitor_ids": ["project-a", "project-c-daily"]}, None)
+        assert mock_process.call_count == 2
 
     reset_clients()
+
+
+def test_handler_empty_event():
+    """No monitor_ids → early return."""
+    handler({}, None)  # should not raise

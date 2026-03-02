@@ -15,15 +15,9 @@ JST = timezone(timedelta(hours=9))
 INGESTION_DELAY_MIN = 2
 POLL_INTERVAL_SEC = 1
 QUERY_TIMEOUT_SEC = 120
-BATCH_SIZE = 25  # max concurrent Insights queries (API limit: 30)
-DEFAULT_QUERY_LIMIT = 500
 
 # ── SNS ──
 MAX_MESSAGE_BYTES = 256 * 1024  # 256KB
-
-# ── Defaults ──
-DEFAULT_SEARCH_WINDOW_MIN = 5
-DEFAULT_SCHEDULE_RATE_MIN = 5
 
 # ── Cached boto3 clients (initialized once per Lambda cold start) ──
 _boto_config = Config(retries={"mode": "standard", "max_attempts": 5})

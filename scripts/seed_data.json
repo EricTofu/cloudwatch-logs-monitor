@@ -1,0 +1,95 @@
+{
+  "log-monitor": [
+    {
+      "PutRequest": {
+        "Item": {
+          "pk": {"S": "GLOBAL"},
+          "sk": {"S": "CONFIG"},
+          "defaults": {
+            "M": {
+              "severity": {"S": "warning"},
+              "search_window_minutes": {"N": "7"},
+              "context_lines": {"N": "5"},
+              "renotify_min": {"N": "60"},
+              "notify_on_recover": {"BOOL": true}
+            }
+          },
+          "sns_topics": {
+            "M": {
+              "critical": {"S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:slack-critical"},
+              "warning": {"S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:slack-warning"},
+              "info": {"S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:slack-info"}
+            }
+          },
+          "email_sns_topics": {
+            "M": {
+              "critical": {"S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-critical"},
+              "warning": {"S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-alerts"}
+            }
+          },
+          "notification_template": {
+            "M": {
+              "subject": {"S": "[{severity}] {display_name} - {keyword} 検出"},
+              "body": {"S": "{mention}\n検出回数: {count}件\n検出時刻: {detected_at}\nログループ: {log_group}\nストリーム: {stream_name}\n\n── ログ行 ──\n{log_lines}\n\n── コンテキスト ──\n{context_lines}"}
+            }
+          },
+          "recover_template": {
+            "M": {
+              "subject": {"S": "[RECOVER] {display_name} - {keyword} 復旧"},
+              "body": {"S": "✅ {display_name} {keyword} が復旧しました"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "PutRequest": {
+        "Item": {
+          "pk": {"S": "MONITOR"},
+          "sk": {"S": "project-a"},
+          "display_name": {"S": "Project Alpha"},
+          "log_group": {"S": "/aws/app/shared-logs"},
+          "search_window_minutes": {"N": "7"},
+          "context_lines": {"N": "10"},
+          "query": {"S": "fields @timestamp, @message, @logStream\n| filter @logStream like /project-a/\n| filter (@message like /ERROR/ or @message like /FATAL/ or @message like /TIMEOUT/)\n| filter @message not like /healthcheck/\n| sort @timestamp asc\n| limit 500"},
+          "keywords": {
+            "L": [
+              {
+                "M": {
+                  "words": {"L": [{"S": "ERROR"}, {"S": "FATAL"}]},
+                  "severity": {"S": "critical"},
+                  "renotify_min": {"N": "30"},
+                  "mention": {"S": "@channel"}
+                }
+              },
+              {
+                "M": {
+                  "words": {"L": [{"S": "TIMEOUT"}]},
+                  "severity": {"S": "warning"},
+                  "renotify_min": {"S": "disabled"}
+                }
+              }
+            ]
+          },
+          "notify_on_recover": {"BOOL": true},
+          "enabled": {"BOOL": true}
+        }
+      }
+    },
+    {
+      "PutRequest": {
+        "Item": {
+          "pk": {"S": "MONITOR"},
+          "sk": {"S": "project-c-daily"},
+          "display_name": {"S": "Project Charlie Daily Report"},
+          "log_group": {"S": "/aws/app/project-c"},
+          "search_window_minutes": {"N": "1450"},
+          "query": {"S": "fields @timestamp, @message, @logStream\n| filter @message like /ERROR|WARN|TIMEOUT/\n| sort @timestamp asc\n| limit 1000"},
+          "severity": {"S": "info"},
+          "notify_on_recover": {"BOOL": false},
+          "enabled": {"BOOL": true}
+        }
+      }
+    }
+  ]
+}

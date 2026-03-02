@@ -14,6 +14,6 @@ output "dynamodb_table_arn" {
   value = aws_dynamodb_table.log_monitor.arn
 }
 
-output "eventbridge_rule_name" {
-  value = aws_cloudwatch_event_rule.schedule.name
+output "schedule_rules" {
+  value = { for k, v in aws_cloudwatch_event_rule.schedule : k => v.arn }
 }
