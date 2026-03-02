@@ -166,7 +166,7 @@
 
 ## 4. DynamoDB テーブル設計
 
-### テーブル名: `log-monitor`
+### テーブル名: `cloudwatch-logs-monitor`
 
 **キー構成**: `pk` (Partition Key) + `sk` (Sort Key)
 
@@ -760,7 +760,7 @@ cloudwatch-logs-monitor/
 | リソース | 説明 |
 |---------|------|
 | Lambda 関数 | Python 3.12, 512MB, **10分タイムアウト** |
-| DynamoDB テーブル | `log-monitor`, PAY_PER_REQUEST |
+| DynamoDB テーブル | `cloudwatch-logs-monitor`, PAY_PER_REQUEST |
 | EventBridge スケジュール | 5分間隔 |
 | IAM ロール | DynamoDB / CloudWatch Logs / SNS の権限 |
 

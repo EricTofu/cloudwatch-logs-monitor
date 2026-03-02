@@ -56,7 +56,7 @@
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `TABLE_NAME` | `"log-monitor"` | DynamoDB table name |
+| `TABLE_NAME` | `"cloudwatch-logs-monitor"` | DynamoDB table name |
 | `JST` | `UTC+9` | Japan Standard Time |
 | `INGESTION_DELAY_MIN` | `2` | CloudWatch log ingestion delay buffer |
 | `POLL_INTERVAL_SEC` | `1` | Insights poll interval |

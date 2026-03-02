@@ -12,7 +12,7 @@ provider "aws" {
 
 # ── DynamoDB Table ──
 resource "aws_dynamodb_table" "log_monitor" {
-  name         = "log-monitor"
+  name         = "cloudwatch-logs-monitor"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
@@ -29,7 +29,7 @@ data "archive_file" "lambda_zip" {
 }
 
 resource "aws_lambda_function" "log_monitor" {
-  function_name    = "log-monitor"
+  function_name    = "cloudwatch-logs-monitor"
   role             = aws_iam_role.lambda_role.arn
   handler          = "log_monitor.handler.handler"
   runtime          = "python3.12"
@@ -48,21 +48,21 @@ resource "aws_lambda_function" "log_monitor" {
 # ── EventBridge Schedules (per schedule group) ──
 resource "aws_cloudwatch_event_rule" "schedule" {
   for_each            = var.schedules
-  name                = "log-monitor-${each.key}"
+  name                = "cloudwatch-logs-monitor-${each.key}"
   schedule_expression = each.value.schedule_expression
 }
 
 resource "aws_cloudwatch_event_target" "schedule" {
   for_each  = var.schedules
   rule      = aws_cloudwatch_event_rule.schedule[each.key].name
-  target_id = "log-monitor-${each.key}"
+  target_id = "cloudwatch-logs-monitor-${each.key}"
   arn       = aws_lambda_function.log_monitor.arn
   input     = jsonencode({ monitor_ids = each.value.monitor_ids })
 }
 
 resource "aws_lambda_permission" "eventbridge" {
   for_each      = var.schedules
-  statement_id  = "AllowEventBridge-${each.key}"
+  statement_id  = "AllowEventBridge${each.key}"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.log_monitor.function_name
   principal     = "events.amazonaws.com"
@@ -71,7 +71,7 @@ resource "aws_lambda_permission" "eventbridge" {
 
 # ── IAM Role ──
 resource "aws_iam_role" "lambda_role" {
-  name = "log-monitor-lambda-role"
+  name = "cloudwatch-logs-monitor-lambda-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -83,7 +83,7 @@ resource "aws_iam_role" "lambda_role" {
 }
 
 resource "aws_iam_role_policy" "lambda_policy" {
-  name = "log-monitor-lambda-policy"
+  name = "cloudwatch-logs-monitor-lambda-policy"
   role = aws_iam_role.lambda_role.id
   policy = jsonencode({
     Version = "2012-10-17"

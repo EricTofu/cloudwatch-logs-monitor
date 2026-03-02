@@ -6,7 +6,7 @@ import boto3
 from botocore.config import Config
 
 # ── DynamoDB ──
-TABLE_NAME = "log-monitor"
+TABLE_NAME = "cloudwatch-logs-monitor"
 
 # ── Timezone ──
 JST = timezone(timedelta(hours=9))

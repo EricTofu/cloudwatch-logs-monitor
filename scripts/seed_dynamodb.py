@@ -14,7 +14,7 @@ def main():
     profile = sys.argv[1]
     session = boto3.Session(profile_name=profile)
     dynamodb = session.resource("dynamodb", region_name="ap-northeast-1")
-    table = dynamodb.Table("log-monitor")
+    table = dynamodb.Table("cloudwatch-logs-monitor")
 
     # ── GLOBAL CONFIG ──
     table.put_item(Item={
