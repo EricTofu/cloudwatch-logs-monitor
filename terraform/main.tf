@@ -116,6 +116,11 @@ resource "aws_iam_role_policy" "lambda_policy" {
         Action   = ["sns:Publish"]
         Resource = "*"
       },
+      {
+        Effect   = "Allow"
+        Action   = ["ses:SendEmail", "ses:SendRawEmail"]
+        Resource = "*"
+      },
     ]
   })
 }

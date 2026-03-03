@@ -1,4 +1,4 @@
-"""Tests for notifier.py — SNS notification."""
+"""Tests for notifier.py — SNS + SES notification."""
 
 import json
 
@@ -6,7 +6,8 @@ from log_monitor.notifier import (
     build_chatbot_payload,
     build_email_payload,
     render_message,
-    resolve_email_sns_topic,
+    resolve_ses_from,
+    resolve_ses_recipients,
     resolve_sns_topic,
     resolve_template,
     truncate_message,
@@ -18,8 +19,13 @@ GLOBAL_CONFIG = {
         "critical": "arn:aws:sns:ap-northeast-1:123:slack-critical",
         "warning": "arn:aws:sns:ap-northeast-1:123:slack-warning",
     },
-    "email_sns_topics": {
-        "critical": "arn:aws:sns:ap-northeast-1:123:email-critical",
+    "ses_config": {
+        "from_address": "alerts@example.com",
+        "reply_to": ["admin@example.com"],
+        "recipients": {
+            "critical": ["oncall@example.com", "manager@example.com"],
+            "warning": ["team@example.com"],
+        },
     },
     "notification_template": {
         "subject": "[{severity}] {display_name} - {keyword}",
@@ -50,17 +56,48 @@ class TestResolveSNSTopic:
         assert topic == "arn:aws:sns:ap-northeast-1:123:slack-critical"
 
 
-class TestResolveEmailSNSTopic:
+class TestResolveSESRecipients:
     def test_monitor_override(self):
         kw_config = {"severity": "critical"}
-        monitor = {"email_sns_topic": "arn:monitor-email"}
-        topic = resolve_email_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
-        assert topic == "arn:monitor-email"
+        monitor = {"ses_config": {"recipients": ["lead@example.com"]}}
+        recipients = resolve_ses_recipients(kw_config, monitor, GLOBAL_CONFIG)
+        assert recipients == ["lead@example.com"]
+
+    def test_global_fallback_by_severity(self):
+        kw_config = {"severity": "critical"}
+        recipients = resolve_ses_recipients(kw_config, {}, GLOBAL_CONFIG)
+        assert recipients == ["oncall@example.com", "manager@example.com"]
+
+    def test_global_fallback_warning(self):
+        kw_config = {"severity": "warning"}
+        recipients = resolve_ses_recipients(kw_config, {}, GLOBAL_CONFIG)
+        assert recipients == ["team@example.com"]
+
+    def test_no_config(self):
+        kw_config = {"severity": "info"}
+        global_no_ses = {"defaults": {"severity": "info"}}
+        recipients = resolve_ses_recipients(kw_config, {}, global_no_ses)
+        assert recipients is None
+
+    def test_case_insensitive_severity(self):
+        kw_config = {"severity": "CRITICAL"}
+        recipients = resolve_ses_recipients(kw_config, {}, GLOBAL_CONFIG)
+        assert recipients == ["oncall@example.com", "manager@example.com"]
+
+
+class TestResolveSESFrom:
+    def test_monitor_override(self):
+        monitor = {"ses_config": {"from_address": "project@example.com"}}
+        from_addr = resolve_ses_from(monitor, GLOBAL_CONFIG)
+        assert from_addr == "project@example.com"
 
     def test_global_fallback(self):
-        kw_config = {"severity": "critical"}
-        topic = resolve_email_sns_topic(kw_config, {}, GLOBAL_CONFIG)
-        assert topic == "arn:aws:sns:ap-northeast-1:123:email-critical"
+        from_addr = resolve_ses_from({}, GLOBAL_CONFIG)
+        assert from_addr == "alerts@example.com"
+
+    def test_no_config(self):
+        from_addr = resolve_ses_from({}, {"defaults": {}})
+        assert from_addr is None
 
 
 class TestResolveTemplate:

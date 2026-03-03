@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 
-from log_monitor.constants import JST, MAX_MESSAGE_BYTES, get_sns_client
+from log_monitor.constants import JST, MAX_MESSAGE_BYTES, get_ses_client, get_sns_client
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +52,41 @@ def resolve_sns_topic(kw_config, monitor_config, global_config):
     return _get_topic_by_severity(global_config.get("sns_topics", {}), severity)
 
 
-def resolve_email_sns_topic(kw_config, monitor_config, global_config):
-    """Resolve Email SNS topic: KEYWORD → MONITOR → GLOBAL."""
-    severity = _resolve_severity(kw_config, monitor_config, global_config)
-
+def resolve_ses_recipients(kw_config, monitor_config, global_config):
+    """Resolve SES recipients: MONITOR → GLOBAL (by severity)."""
     # 1. MONITOR-level
-    if monitor_config.get("email_sns_topic"):
-        return monitor_config["email_sns_topic"]
+    ses_config = monitor_config.get("ses_config", {})
+    if ses_config.get("recipients"):
+        recipients = ses_config["recipients"]
+        if isinstance(recipients, list):
+            return recipients
 
-    # 2. GLOBAL by severity (case-insensitive)
-    return _get_topic_by_severity(global_config.get("email_sns_topics", {}), severity)
+    # 2. GLOBAL by severity
+    severity = _resolve_severity(kw_config, monitor_config, global_config)
+    global_ses = global_config.get("ses_config", {})
+    recipients_map = global_ses.get("recipients", {})
+    if recipients_map and severity:
+        # Case-insensitive lookup
+        if severity in recipients_map:
+            return recipients_map[severity]
+        severity_lower = severity.lower()
+        for key, value in recipients_map.items():
+            if key.lower() == severity_lower:
+                return value
+
+    return None
+
+
+def resolve_ses_from(monitor_config, global_config):
+    """Resolve SES from address: MONITOR → GLOBAL."""
+    # 1. MONITOR-level
+    ses_config = monitor_config.get("ses_config", {})
+    if ses_config.get("from_address"):
+        return ses_config["from_address"]
+
+    # 2. GLOBAL
+    global_ses = global_config.get("ses_config", {})
+    return global_ses.get("from_address")
 
 
 def resolve_template(monitor_config, global_config, action):
@@ -209,28 +234,43 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
             "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
         )
 
-    # ── Email notification (full content, no truncation) ──
-    email_topic = resolve_email_sns_topic(kw_config, monitor_config, global_config)
-    if email_topic:
+    # ── Email notification (SES) ──
+    ses_recipients = resolve_ses_recipients(kw_config, monitor_config, global_config)
+    ses_from = resolve_ses_from(monitor_config, global_config)
+    if ses_recipients and ses_from:
         variables = {
             **base_variables,
             "log_lines": "\n\n".join(log_line_parts),
             "context_lines": context_text,
         }
         rendered = render_message(template, variables)
-        email_text = build_email_payload(rendered["subject"], rendered["body"])
+        email_body = build_email_payload(rendered["subject"], rendered["body"])
+
+        # reply_to from MONITOR → GLOBAL
+        mon_ses = monitor_config.get("ses_config", {})
+        reply_to = mon_ses.get("reply_to") or global_config.get("ses_config", {}).get("reply_to", [])
+
         try:
-            sns_client.publish(
-                TopicArn=email_topic,
-                Message=email_text,
-                Subject=rendered["subject"][:100],
+            ses_client = get_ses_client()
+            ses_client.send_email(
+                Source=ses_from,
+                Destination={"ToAddresses": ses_recipients},
+                ReplyToAddresses=reply_to,
+                Message={
+                    "Subject": {"Data": rendered["subject"][:998], "Charset": "UTF-8"},
+                    "Body": {"Text": {"Data": email_body, "Charset": "UTF-8"}},
+                },
             )
-            logger.info("Email notification sent: topic=%s, keyword=%s", email_topic, keyword)
+            logger.info(
+                "SES email sent: from=%s, to=%s, keyword=%s",
+                ses_from, ses_recipients, keyword,
+            )
         except Exception:
-            logger.exception("Failed to send email notification: topic=%s", email_topic)
+            logger.exception("Failed to send SES email: from=%s, to=%s", ses_from, ses_recipients)
     else:
         logger.warning(
-            "No Email SNS topic found: severity=%s, keyword=%s", severity, keyword
+            "No SES email config found: recipients=%s, from=%s, keyword=%s",
+            ses_recipients, ses_from, keyword,
         )
 
 
