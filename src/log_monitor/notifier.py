@@ -190,7 +190,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         "count": str(len(events)),
         "detected_at": datetime.now(tz=JST).strftime("%Y-%m-%d %H:%M:%S JST"),
         "log_group": monitor_config.get("log_group", ""),
-        "stream_name": ", ".join(stream_names[:3]),
+        "stream_name": "\n".join(stream_names[:3]),
         "mention": monitor_config.get("mention", kw_config.get("mention", "")),
     }
 

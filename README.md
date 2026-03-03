@@ -21,7 +21,8 @@ EventBridge Rules (スケジュール単位)
          ↓
 Lambda → DynamoDB (MONITOR設定 + 生クエリ読み取り)
        → Logs Insights (クエリ実行)
-       → SNS → Chatbot → Slack / Email
+       → SNS → Chatbot → Slack
+       → SES → Email
 ```
 
 ## プロジェクト構成
@@ -33,7 +34,7 @@ Lambda → DynamoDB (MONITOR設定 + 生クエリ読み取り)
 │   ├── query.py           # Insights クエリ実行 + 結果振り分け
 │   ├── context.py         # 前後ログ行取得
 │   ├── state.py           # 状態遷移ロジック
-│   ├── notifier.py        # SNS 通知
+│   ├── notifier.py        # SNS + SES 通知
 │   └── constants.py       # 定数
 ├── tests/
 ├── terraform/
@@ -115,6 +116,36 @@ uv run python scripts/seed_dynamodb.py your-profile
   "enabled": true
 }
 ```
+
+### GLOBAL#CONFIG（SES メール通知設定）
+
+```json
+{
+  "pk": "GLOBAL", "sk": "CONFIG",
+  "ses_config": {
+    "from_address": "alerts@example.com",
+    "reply_to": ["admin@example.com"],
+    "recipients": {
+      "critical": ["oncall@example.com", "manager@example.com"],
+      "warning": ["team@example.com"]
+    }
+  }
+}
+```
+
+### MONITOR レコード（SES 上書き）
+
+```json
+{
+  "pk": "MONITOR", "sk": "project-a",
+  "ses_config": {
+    "from_address": "project-a@example.com",
+    "recipients": ["lead@example.com", "dev-team@example.com"]
+  }
+}
+```
+
+> **解決順**: MONITOR `ses_config` → GLOBAL `ses_config`（severity 別）→ 未設定なら送信なし
 
 ## テスト
 
