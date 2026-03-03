@@ -64,9 +64,13 @@ SAMPLE_GLOBAL_CONFIG = {
         "critical": "arn:aws:sns:ap-northeast-1:123456789012:slack-critical",
         "warning": "arn:aws:sns:ap-northeast-1:123456789012:slack-warning",
     },
-    "email_sns_topics": {
-        "critical": "arn:aws:sns:ap-northeast-1:123456789012:email-critical",
-        "warning": "arn:aws:sns:ap-northeast-1:123456789012:email-alerts",
+    "ses_config": {
+        "from_address": "alerts@example.com",
+        "reply_to": ["admin@example.com"],
+        "recipients": {
+            "critical": ["oncall@example.com", "manager@example.com"],
+            "warning": ["team@example.com"],
+        },
     },
     "notification_template": {
         "subject": "[{severity}] {display_name} - {keyword} 検出",

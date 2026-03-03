@@ -32,9 +32,13 @@ def main():
             "warning": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:slack-warning",
             "info": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:slack-info",
         },
-        "email_sns_topics": {
-            "critical": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-critical",
-            "warning": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-alerts",
+        "ses_config": {
+            "from_address": "alerts@example.com",
+            "reply_to": ["admin@example.com"],
+            "recipients": {
+                "critical": ["oncall@example.com", "manager@example.com"],
+                "warning": ["team@example.com"],
+            },
         },
         "notification_template": {
             "subject": "[{severity}] {display_name} - {keyword} 検出",

@@ -1,10 +1,10 @@
-"""SNS notification with Chatbot custom schema and Email support."""
+"""SNS notification with Chatbot custom schema and SES Email support."""
 
 import json
 import logging
 from datetime import datetime
 
-from log_monitor.constants import JST, MAX_MESSAGE_BYTES, get_ses_client, get_sns_client
+from log_monitor.constants import JST, get_ses_client, get_sns_client
 
 logger = logging.getLogger(__name__)
 
@@ -137,18 +137,6 @@ def build_chatbot_payload(subject, body, severity, keywords_list=None):
 def build_email_payload(subject, body):
     """Build plain text payload for email notifications."""
     return f"{subject}\n\n{body}"
-
-
-def truncate_message(message, max_bytes=MAX_MESSAGE_BYTES):
-    """Truncate message to fit within SNS size limit."""
-    encoded = message.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return message
-
-    truncation_marker = "\n\n... (truncated)"
-    available = max_bytes - len(truncation_marker.encode("utf-8"))
-    truncated = encoded[:available].decode("utf-8", errors="ignore")
-    return truncated + truncation_marker
 
 
 def send_notification(kw_config, monitor_config, global_config, action, events, keyword):
@@ -287,9 +275,14 @@ def _split_log_lines_pages(log_line_parts, context_text, template, base_variable
     test_rendered = render_message(template, test_vars)
     header_size = len(test_rendered["body"])
 
-    available = max_desc - header_size
-    if available < 200:
-        available = 2000  # fallback
+    # Page 1 needs room for context text, other pages don't
+    context_cost = len(context_text) if context_text else 0
+    available_first = max_desc - header_size - context_cost
+    available_rest = max_desc - header_size
+    if available_first < 200:
+        available_first = 2000  # fallback
+    if available_rest < 200:
+        available_rest = 2000  # fallback
 
     pages = []
     current_lines = []
@@ -297,8 +290,8 @@ def _split_log_lines_pages(log_line_parts, context_text, template, base_variable
 
     for line in log_line_parts:
         line_len = len(line) + 1
+        available = available_first if not pages else available_rest
         if current_len + line_len > available and current_lines:
-            # First page gets context, rest don't
             ctx = context_text if not pages else "(see page 1)"
             pages.append(("\n".join(current_lines), ctx))
             current_lines = [line]

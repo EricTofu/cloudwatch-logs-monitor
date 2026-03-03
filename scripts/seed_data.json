@@ -41,13 +41,38 @@
               }
             }
           },
-          "email_sns_topics": {
+          "ses_config": {
             "M": {
-              "critical": {
-                "S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-critical"
+              "from_address": {
+                "S": "alerts@example.com"
               },
-              "warning": {
-                "S": "arn:aws:sns:ap-northeast-1:ACCOUNT_ID:email-alerts"
+              "reply_to": {
+                "L": [
+                  {
+                    "S": "admin@example.com"
+                  }
+                ]
+              },
+              "recipients": {
+                "M": {
+                  "critical": {
+                    "L": [
+                      {
+                        "S": "oncall@example.com"
+                      },
+                      {
+                        "S": "manager@example.com"
+                      }
+                    ]
+                  },
+                  "warning": {
+                    "L": [
+                      {
+                        "S": "team@example.com"
+                      }
+                    ]
+                  }
+                }
               }
             }
           },

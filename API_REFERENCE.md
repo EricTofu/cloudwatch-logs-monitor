@@ -43,18 +43,18 @@
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `send_notification` | `(kw_config, monitor_config, global_config, action, events, keyword)` | Publish to Slack (Chatbot) + Email |
-| `resolve_sns_topic` | `(kw_config, monitor_config, global_config)` | 3-tier topic resolution |
-| `resolve_email_sns_topic` | `(kw_config, monitor_config, global_config)` | Email topic resolution |
+| `send_notification` | `(kw_config, monitor_config, global_config, action, events, keyword)` | Publish to Slack (Chatbot) + SES Email |
+| `resolve_sns_topic` | `(kw_config, monitor_config, global_config)` | 3-tier Slack topic resolution |
+| `resolve_ses_recipients` | `(kw_config, monitor_config, global_config)` | SES recipients: MONITOR → GLOBAL (severity) |
+| `resolve_ses_from` | `(monitor_config, global_config)` | SES from address: MONITOR → GLOBAL |
 | `resolve_template` | `(monitor_config, global_config, action)` | Template resolution |
 | `render_message` | `(template, variables)` | Expand `{variable}` placeholders |
 | `build_chatbot_payload` | `(subject, body, severity, keywords_list=None)` | AWS Chatbot JSON schema |
 | `build_email_payload` | `(subject, body)` | Plain text for email |
-| `truncate_message` | `(message, max_bytes=...)` | 256KB truncation guard |
 
 ## constants.py
 
-| Constant | Value | Description |
+| Constant / Function | Value | Description |
 |----------|-------|-------------|
 | `TABLE_NAME` | `"cloudwatch-logs-monitor"` | DynamoDB table name |
 | `JST` | `UTC+9` | Japan Standard Time |
@@ -62,3 +62,7 @@
 | `POLL_INTERVAL_SEC` | `1` | Insights poll interval |
 | `QUERY_TIMEOUT_SEC` | `120` | Insights query timeout |
 | `MAX_MESSAGE_BYTES` | `256KB` | SNS message size limit |
+| `get_logs_client()` | — | Cached CloudWatch Logs client |
+| `get_sns_client()` | — | Cached SNS client |
+| `get_ses_client()` | — | Cached SES client |
+| `get_dynamodb_resource()` | — | Cached DynamoDB resource |

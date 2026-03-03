@@ -10,7 +10,6 @@ from log_monitor.notifier import (
     resolve_ses_recipients,
     resolve_sns_topic,
     resolve_template,
-    truncate_message,
 )
 
 GLOBAL_CONFIG = {
@@ -140,13 +139,3 @@ class TestBuildPayloads:
         result = build_email_payload("Subject", "Body")
         assert result == "Subject\n\nBody"
 
-
-class TestTruncateMessage:
-    def test_no_truncation(self):
-        assert truncate_message("short") == "short"
-
-    def test_truncation(self):
-        msg = "x" * (300 * 1024)
-        result = truncate_message(msg)
-        assert len(result.encode("utf-8")) <= 256 * 1024
-        assert result.endswith("... (truncated)")
