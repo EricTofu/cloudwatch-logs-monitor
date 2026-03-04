@@ -86,7 +86,7 @@ def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
     return active_fingerprints
 
 
-def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, table=None):
+def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_message=None, table=None):
     """Create or update a STATE record based on the action."""
     table = _get_table(table)
     sk = f"{monitor_id}#{keyword}"
@@ -94,23 +94,44 @@ def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, table=
         sk += f"#{fingerprint}"
 
     if action == "NOTIFY":
-        table.update_item(
-            Key={"pk": "STATE", "sk": sk},
-            UpdateExpression=(
-                "SET #status = :alarm, "
-                "last_detected_at = :now, "
-                "last_notified_at = :now, "
-                "current_streak = :one, "
-                "detection_count = :count"
-            ),
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":alarm": "ALARM",
-                ":now": now_ms,
-                ":one": 1,
-                ":count": count,
-            },
-        )
+        if first_message is not None:
+            table.update_item(
+                Key={"pk": "STATE", "sk": sk},
+                UpdateExpression=(
+                    "SET #status = :alarm, "
+                    "last_detected_at = :now, "
+                    "last_notified_at = :now, "
+                    "current_streak = :one, "
+                    "detection_count = :count, "
+                    "first_message = :first_msg"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":alarm": "ALARM",
+                    ":now": now_ms,
+                    ":one": 1,
+                    ":count": count,
+                    ":first_msg": first_message,
+                },
+            )
+        else:
+            table.update_item(
+                Key={"pk": "STATE", "sk": sk},
+                UpdateExpression=(
+                    "SET #status = :alarm, "
+                    "last_detected_at = :now, "
+                    "last_notified_at = :now, "
+                    "current_streak = :one, "
+                    "detection_count = :count"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":alarm": "ALARM",
+                    ":now": now_ms,
+                    ":one": 1,
+                    ":count": count,
+                },
+            )
     elif action == "RENOTIFY":
         table.update_item(
             Key={"pk": "STATE", "sk": sk},

@@ -152,14 +152,21 @@ def _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, f
         action,
     )
 
+    first_message = events[0].get("message", "(No message extracted)") if events else None
+    
     if action in ("NOTIFY", "RENOTIFY", "RECOVER"):
+        original_message = state.get("first_message") if state else None
+        # On NOTIFY, the state might not exist yet, so we use the incoming message
+        if action == "NOTIFY" and first_message:
+            original_message = first_message
+
         try:
-            send_notification(kw_group, config, global_config, action, events, keyword, fingerprint)
+            send_notification(kw_group, config, global_config, action, events, keyword, fingerprint, original_message)
         except Exception:
             logger.exception("Failed to notify: monitor=%s, keyword=%s", monitor_id, keyword)
 
     if action != "NOOP":
-        update_state(monitor_id, keyword, fingerprint, action, count, now_ms)
+        update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_message)
 
 
 def _process_monitor_level(monitor_id, config, global_config, defaults, dispatched, now_ms):

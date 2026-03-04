@@ -86,9 +86,9 @@ def test_update_state_notify(aws_credentials):
     reset_clients()
     table = _create_table()
 
-    update_state("project-a", "ERROR", None, "NOTIFY", 3, 1740000000000, table)
+    update_state("project-a", "ERROR", None, "NOTIFY", 3, 1740000000000, table=table)
 
-    state = get_state("project-a", "ERROR", None, table)
+    state = get_state("project-a", "ERROR", None, table=table)
     assert state["status"] == "ALARM"
     assert state["last_detected_at"] == 1740000000000
     assert state["detection_count"] == 3
@@ -100,10 +100,10 @@ def test_update_state_recover(aws_credentials):
     reset_clients()
     table = _create_table()
 
-    update_state("project-a", "ERROR", None, "NOTIFY", 3, 1740000000000, table)
-    update_state("project-a", "ERROR", None, "RECOVER", 0, 1740001000000, table)
+    update_state("project-a", "ERROR", None, "NOTIFY", 3, 1740000000000, table=table)
+    update_state("project-a", "ERROR", None, "RECOVER", 0, 1740001000000, table=table)
 
-    state = get_state("project-a", "ERROR", None, table)
+    state = get_state("project-a", "ERROR", None, table=table)
     assert state["status"] == "OK"
     assert state["last_detected_at"] is None
     assert state["current_streak"] == 0
@@ -114,10 +114,10 @@ def test_update_state_renotify(aws_credentials):
     reset_clients()
     table = _create_table()
 
-    update_state("project-a", "ERROR", None, "NOTIFY", 2, 1740000000000, table)
-    update_state("project-a", "ERROR", None, "RENOTIFY", 1, 1740001000000, table)
+    update_state("project-a", "ERROR", None, "NOTIFY", 2, 1740000000000, table=table)
+    update_state("project-a", "ERROR", None, "RENOTIFY", 1, 1740001000000, table=table)
 
-    state = get_state("project-a", "ERROR", None, table)
+    state = get_state("project-a", "ERROR", None, table=table)
     assert state["status"] == "ALARM"
     assert state["last_notified_at"] == 1740001000000
     assert state["detection_count"] == 3  # 2 + 1

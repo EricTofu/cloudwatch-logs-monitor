@@ -139,7 +139,7 @@ def build_email_payload(subject, body):
     return f"{subject}\n\n{body}"
 
 
-def send_notification(kw_config, monitor_config, global_config, action, events, keyword, fingerprint=None):
+def send_notification(kw_config, monitor_config, global_config, action, events, keyword, fingerprint=None, original_message=None):
     """Orchestrator: resolve topics → render → publish to Slack + Email.
 
     Args:
@@ -150,6 +150,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         events: List of matching event dicts.
         keyword: The specific keyword that triggered this notification.
         fingerprint: (Optional) The message fingerprint used for grouping.
+        original_message: (Optional) The raw original alarmed log message.
     """
     sns_client = get_sns_client()
 
@@ -181,6 +182,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         "display_name": monitor_config.get("display_name", monitor_config.get("sk", "")),
         "keyword": keyword,
         "fingerprint": fingerprint or "",
+        "original_message": original_message or "",
         "severity": severity.upper(),
         "count": str(len(events)),
         "detected_at": datetime.now(tz=JST).strftime("%Y-%m-%d %H:%M:%S JST"),

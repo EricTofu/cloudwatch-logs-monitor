@@ -1,0 +1,65 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- /home/eric/Documents/Code/python/cloudwatch-logs-monitor/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /home/eric/Documents/Code/python/cloudwatch-logs-monitor
+configfile: pyproject.toml
+plugins: cov-7.0.0, timeout-2.4.0
+collecting ... collected 55 items
+
+tests/test_config.py::test_get_global_config PASSED
+tests/test_config.py::test_get_global_config_missing PASSED
+tests/test_config.py::test_get_monitor_config PASSED
+tests/test_config.py::test_get_monitor_config_missing PASSED
+tests/test_config.py::test_get_state_missing PASSED
+tests/test_config.py::test_update_state_notify PASSED
+tests/test_config.py::test_update_state_recover PASSED
+tests/test_config.py::test_update_state_renotify PASSED
+tests/test_config.py::test_merge_defaults PASSED
+tests/test_fingerprint.py::test_mask_message PASSED
+tests/test_fingerprint.py::test_generate_fingerprint_consistency PASSED
+tests/test_handler.py::TestProcessMonitor::test_no_results PASSED
+tests/test_handler.py::TestProcessMonitor::test_with_matches PASSED
+tests/test_handler.py::TestProcessMonitor::test_monitor_level_no_keywords PASSED
+tests/test_handler.py::TestProcessMonitor::test_disabled_monitor PASSED
+tests/test_handler.py::test_handler_integration PASSED
+tests/test_handler.py::test_handler_error_isolation PASSED
+tests/test_handler.py::test_handler_empty_event PASSED
+tests/test_handler.py::test_recovery_with_fingerprints PASSED
+tests/test_notifier.py::TestResolveSNSTopic::test_keyword_override PASSED
+tests/test_notifier.py::TestResolveSNSTopic::test_monitor_override PASSED
+tests/test_notifier.py::TestResolveSNSTopic::test_global_fallback PASSED
+tests/test_notifier.py::TestResolveSESRecipients::test_monitor_override PASSED
+tests/test_notifier.py::TestResolveSESRecipients::test_global_fallback_by_severity PASSED
+tests/test_notifier.py::TestResolveSESRecipients::test_global_fallback_warning PASSED
+tests/test_notifier.py::TestResolveSESRecipients::test_no_config PASSED
+tests/test_notifier.py::TestResolveSESRecipients::test_case_insensitive_severity PASSED
+tests/test_notifier.py::TestResolveSESFrom::test_monitor_override PASSED
+tests/test_notifier.py::TestResolveSESFrom::test_global_fallback PASSED
+tests/test_notifier.py::TestResolveSESFrom::test_no_config PASSED
+tests/test_notifier.py::TestResolveTemplate::test_notification_template PASSED
+tests/test_notifier.py::TestResolveTemplate::test_recover_template PASSED
+tests/test_notifier.py::TestResolveTemplate::test_monitor_override PASSED
+tests/test_notifier.py::TestRenderMessage::test_basic PASSED
+tests/test_notifier.py::TestRenderMessage::test_missing_variable PASSED
+tests/test_notifier.py::TestBuildPayloads::test_chatbot PASSED
+tests/test_notifier.py::TestBuildPayloads::test_email PASSED
+tests/test_query.py::test_dispatch_results_with_keywords PASSED
+tests/test_query.py::test_dispatch_results_no_keywords PASSED
+tests/test_query.py::test_dispatch_results_empty PASSED
+tests/test_query.py::test_dispatch_results_no_match PASSED
+tests/test_state.py::test_resolve_renotify_min_explicit PASSED
+tests/test_state.py::test_resolve_renotify_min_disabled PASSED
+tests/test_state.py::test_resolve_renotify_min_fallback PASSED
+tests/test_state.py::test_resolve_notify_on_recover_override PASSED
+tests/test_state.py::test_resolve_notify_on_recover_fallback PASSED
+tests/test_state.py::test_evaluate_notify PASSED
+tests/test_state.py::test_evaluate_notify_from_ok PASSED
+tests/test_state.py::test_evaluate_suppress PASSED
+tests/test_state.py::test_evaluate_renotify PASSED
+tests/test_state.py::test_evaluate_suppress_disabled_renotify PASSED
+tests/test_state.py::test_evaluate_recover PASSED
+tests/test_state.py::test_evaluate_recover_silent PASSED
+tests/test_state.py::test_evaluate_noop PASSED
+tests/test_state.py::test_evaluate_noop_no_state PASSED
+
+============================== 55 passed in 2.79s ==============================
