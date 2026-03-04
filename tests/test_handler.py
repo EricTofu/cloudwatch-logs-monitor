@@ -19,6 +19,7 @@ class TestProcessMonitor:
             patch("log_monitor.handler.execute_query", return_value=[]),
             patch("log_monitor.handler.update_state") as mock_update,
             patch("log_monitor.handler.get_state", return_value=None),
+            patch("log_monitor.handler.get_active_alarm_fingerprints", return_value=[]),
         ):
             process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
             mock_update.assert_not_called()
@@ -38,6 +39,7 @@ class TestProcessMonitor:
             patch("log_monitor.handler.send_notification") as mock_notify,
             patch("log_monitor.handler.update_state") as mock_update,
             patch("log_monitor.handler.get_state", return_value=None),
+            patch("log_monitor.handler.get_active_alarm_fingerprints", return_value=[]),
             patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, c, g: e),
         ):
             process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
@@ -59,6 +61,7 @@ class TestProcessMonitor:
             patch("log_monitor.handler.send_notification") as mock_notify,
             patch("log_monitor.handler.update_state") as mock_update,
             patch("log_monitor.handler.get_state", return_value=None),
+            patch("log_monitor.handler.get_active_alarm_fingerprints", return_value=[]),
             patch("log_monitor.handler.enrich_with_context", side_effect=lambda e, c, g: e),
         ):
             process_monitor("project-c-daily", SAMPLE_GLOBAL_CONFIG, 1740000000000, 1740000000000)
@@ -178,3 +181,60 @@ def test_handler_error_isolation(aws_credentials):
 def test_handler_empty_event():
     """No monitor_ids → early return."""
     handler({}, None)  # should not raise
+
+
+@mock_aws
+def test_recovery_with_fingerprints(aws_credentials):
+    """Test that active alarms with fingerprints are recovered when 0 events occur."""
+    reset_clients()
+
+    dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-1")
+    table = dynamodb.create_table(
+        TableName=TABLE_NAME,
+        KeySchema=[
+            {"AttributeName": "pk", "KeyType": "HASH"},
+            {"AttributeName": "sk", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "pk", "AttributeType": "S"},
+            {"AttributeName": "sk", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    table.put_item(Item=SAMPLE_GLOBAL_CONFIG)
+    table.put_item(Item=SAMPLE_MONITOR_A)
+    
+    # Pre-seed an ALARM state for a specific fingerprint
+    now_ms = 1740000000000
+    table.put_item(
+        Item={
+            "pk": "STATE",
+            "sk": "project-a#ERROR#test_fp_123",
+            "status": "ALARM",
+            "last_detected_at": now_ms - 300000,
+            "last_notified_at": now_ms - 300000,
+            "current_streak": 5,
+            "detection_count": 10,
+        }
+    )
+
+    # Mock getting 0 results
+    with (
+        patch("log_monitor.handler.get_monitor_config", return_value=SAMPLE_MONITOR_A),
+        patch("log_monitor.handler.get_global_config", return_value=SAMPLE_GLOBAL_CONFIG),
+        patch("log_monitor.handler.execute_query", return_value=[]),
+        patch("log_monitor.handler.send_notification") as mock_notify,
+    ):
+        process_monitor("project-a", SAMPLE_GLOBAL_CONFIG, now_ms, now_ms)
+
+        # Notify should have been called for RECOVER
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[3] == "RECOVER"
+        assert call_args[6] == "test_fp_123"
+
+        # Check DynamoDB that state is now OK
+        resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR#test_fp_123"})
+        assert resp["Item"]["status"] == "OK"
+
+    reset_clients()

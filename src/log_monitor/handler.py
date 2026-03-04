@@ -3,7 +3,14 @@
 import logging
 import time
 
-from log_monitor.config import get_global_config, get_monitor_config, get_state, merge_defaults, update_state
+from log_monitor.config import (
+    get_global_config,
+    get_monitor_config,
+    get_state,
+    merge_defaults,
+    update_state,
+    get_active_alarm_fingerprints,
+)
 from log_monitor.constants import INGESTION_DELAY_MIN
 from log_monitor.context import enrich_with_context
 from log_monitor.fingerprint import generate_fingerprint
@@ -99,9 +106,17 @@ def _process_keywords(monitor_id, config, global_config, defaults, dispatched, n
     for kw_group in config.get("keywords", []):
         for keyword in kw_group.get("words", []):
             all_events = dispatched.get(keyword, [])
+            
+            # Fetch active alarms for this monitor/keyword
+            active_fps = get_active_alarm_fingerprints(monitor_id, keyword)
+
             if not all_events:
                 # Still need to check for RECOVER action even if 0 events
-                _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, None, [], now_ms)
+                if active_fps:
+                    for fp in active_fps:
+                        _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms)
+                else:
+                    _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, None, [], now_ms)
                 continue
 
             # Group events by fingerprint
@@ -112,6 +127,11 @@ def _process_keywords(monitor_id, config, global_config, defaults, dispatched, n
 
             for fp, events in grouped_events.items():
                 _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, events, now_ms)
+                
+            # Evaluate any active fingerprints that do not have events right now
+            for fp in active_fps:
+                if fp not in grouped_events:
+                    _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms)
 
 
 def _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fingerprint, events, now_ms):
@@ -147,9 +167,15 @@ def _process_monitor_level(monitor_id, config, global_config, defaults, dispatch
     all_events = dispatched.get("_all", [])
     kw_config = {"severity": config.get("severity", defaults.get("severity", "warning"))}
     keyword = "_all"
+    
+    active_fps = get_active_alarm_fingerprints(monitor_id, keyword)
 
     if not all_events:
-        _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, None, [], now_ms)
+        if active_fps:
+            for fp in active_fps:
+                _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms)
+        else:
+            _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, None, [], now_ms)
         return
 
     # Group by fingerprint even at monitor level
@@ -160,3 +186,7 @@ def _process_monitor_level(monitor_id, config, global_config, defaults, dispatch
 
     for fp, events in grouped_events.items():
         _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, events, now_ms)
+
+    for fp in active_fps:
+        if fp not in grouped_events:
+            _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms)
