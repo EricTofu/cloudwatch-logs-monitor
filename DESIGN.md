@@ -596,7 +596,15 @@ Email は SES `SendEmail` API を使用し、**プレーンテキスト形式** 
 - 通知には**最初の N 件**のログ内容を含める（`max_log_lines` で設定）
 - 重複メッセージ（完全一致）は除去し、ユニークなログのみ表示
 
-## 8. 状態遷移ロジック
+## 8. コンテンツベースの状態管理と重複抑制
+
+同じキーワード（例: `ERROR`）に対して「DBエラー」と「メモリエラー」が個別に発生した場合でも、適切に別々のエラーとして扱えるよう **コンテンツベース (Fingerprint-based)** の状態管理を採用しています。
+
+1. **マスキング**: 検知されたログメッセージ内の IP アドレス、UUID、タイムスタンプなどの変動要素を正規表現で `<VAR>` 等の文字列に置換します。
+2. **ハッシュ化**: マスキング後の文字列から MD5 （12文字）のハッシュ値である**フィンガープリント**を生成します。
+3. **キー管理**: DynamoDB `STATE` レコードの Sort Key は `monitor_id#keyword#fingerprint` になります。
+
+これにより、同一キーワードであってもエラーの内容が異なれば新しい `STATE` レコードが作られ、即座にアラートが発報されます。同一のエラー構造（同じフィンガープリント）が再発した場合は `renotify_min`（再通知間隔）に基づくスマートな重複抑制が機能します。
 
 ### 8.1 状態遷移図
 
@@ -629,7 +637,7 @@ def evaluate_state(state, matches, monitor, global_config):
     status = state.get("status", "OK") if state else "OK"
     defaults = global_config["defaults"]
 
-    # renotify_min の解決: "disabled" → None, 未設定 → defaults
+    # renotify_min は Fingerprint レベルで独立して機能します
     renotify = monitor.get("renotify_min", "FALLBACK")
     if renotify == "FALLBACK":
         renotify = defaults.get("renotify_min")
@@ -719,7 +727,8 @@ def handler(event, context):
 | **boto3 リトライ** | Standard Retry Mode 有効化 |
 | **取り込み遅延バッファ** | 検索終了時刻を `now - 2分` に設定 |
 | **タイムアウト安全設計** | `last_searched_at` はプロジェクト単位で更新 |
-| **SNS サイズ制限** | メッセージを最大 256KB に truncate |
+| **SNS サイズ制限** | メッセージを最大 256KB に truncate。Chatbot向けにパジネーション対応 |
+| **Context API 最適化** | 該当行の前後方向フェッチを行い、Lambdaインメモリキャッシュ (`_context_cache`) で同一ログに対する無駄なAPI呼び出しを抑制 |
 
 ## 10. プロジェクト構成
 
