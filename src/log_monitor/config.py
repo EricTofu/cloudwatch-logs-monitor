@@ -47,19 +47,23 @@ def get_monitor_config(monitor_id, table=None):
     return _convert_decimals(item) if item else None
 
 
-def get_state(monitor_id, keyword, table=None):
-    """Fetch STATE record for a monitor#keyword combination."""
+def get_state(monitor_id, keyword, fingerprint=None, table=None):
+    """Fetch STATE record for a monitor#keyword#fingerprint combination."""
     table = _get_table(table)
     sk = f"{monitor_id}#{keyword}"
+    if fingerprint:
+        sk += f"#{fingerprint}"
     resp = table.get_item(Key={"pk": "STATE", "sk": sk})
     item = resp.get("Item")
     return _convert_decimals(item) if item else None
 
 
-def update_state(monitor_id, keyword, action, count, now_ms, table=None):
+def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, table=None):
     """Create or update a STATE record based on the action."""
     table = _get_table(table)
     sk = f"{monitor_id}#{keyword}"
+    if fingerprint:
+        sk += f"#{fingerprint}"
 
     if action == "NOTIFY":
         table.update_item(

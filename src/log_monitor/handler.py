@@ -6,6 +6,7 @@ import time
 from log_monitor.config import get_global_config, get_monitor_config, get_state, merge_defaults, update_state
 from log_monitor.constants import INGESTION_DELAY_MIN
 from log_monitor.context import enrich_with_context
+from log_monitor.fingerprint import generate_fingerprint
 from log_monitor.notifier import send_notification
 from log_monitor.query import dispatch_results, execute_query
 from log_monitor.state import evaluate_state
@@ -97,57 +98,65 @@ def _process_keywords(monitor_id, config, global_config, defaults, dispatched, n
     """Process dispatched results per keyword group."""
     for kw_group in config.get("keywords", []):
         for keyword in kw_group.get("words", []):
-            events = dispatched.get(keyword, [])
+            all_events = dispatched.get(keyword, [])
+            if not all_events:
+                # Still need to check for RECOVER action even if 0 events
+                _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, None, [], now_ms)
+                continue
 
-            # Enrich with context lines
-            if events:
-                events = enrich_with_context(events, config, global_config)
+            # Group events by fingerprint
+            grouped_events = {}
+            for event in all_events:
+                fp = generate_fingerprint(event.get("message", ""))
+                grouped_events.setdefault(fp, []).append(event)
 
-            # Evaluate state transition
-            count = len(events)
-            state = get_state(monitor_id, keyword)
-            action = evaluate_state(state, count, kw_group, config, global_config)
-
-            logger.info(
-                "Monitor=%s, Keyword=%s, Count=%d, Action=%s",
-                monitor_id,
-                keyword,
-                count,
-                action,
-            )
-
-            # Send notification
-            if action in ("NOTIFY", "RENOTIFY", "RECOVER"):
-                try:
-                    send_notification(kw_group, config, global_config, action, events, keyword)
-                except Exception:
-                    logger.exception("Failed to notify: monitor=%s, keyword=%s", monitor_id, keyword)
-
-            # Update STATE
-            if action != "NOOP":
-                update_state(monitor_id, keyword, action, count, now_ms)
+            for fp, events in grouped_events.items():
+                _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, events, now_ms)
 
 
-def _process_monitor_level(monitor_id, config, global_config, defaults, dispatched, now_ms):
-    """Process results at monitor level (no keywords defined)."""
-    events = dispatched.get("_all", [])
-
+def _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fingerprint, events, now_ms):
+    """Evaluate state and send notification for a specific keyword + fingerprint."""
     if events:
         events = enrich_with_context(events, config, global_config)
 
     count = len(events)
-    # Use a synthetic kw_config from monitor-level settings
-    kw_config = {"severity": config.get("severity", defaults.get("severity", "warning"))}
-    state = get_state(monitor_id, "_all")
-    action = evaluate_state(state, count, kw_config, config, global_config)
+    state = get_state(monitor_id, keyword, fingerprint)
+    action = evaluate_state(state, count, kw_group, config, global_config)
 
-    logger.info("Monitor=%s, Count=%d, Action=%s", monitor_id, count, action)
+    logger.info(
+        "Monitor=%s, Keyword=%s, Fingerprint=%s, Count=%d, Action=%s",
+        monitor_id,
+        keyword,
+        fingerprint,
+        count,
+        action,
+    )
 
     if action in ("NOTIFY", "RENOTIFY", "RECOVER"):
         try:
-            send_notification(kw_config, config, global_config, action, events, monitor_id)
+            send_notification(kw_group, config, global_config, action, events, keyword, fingerprint)
         except Exception:
-            logger.exception("Failed to notify: monitor=%s", monitor_id)
+            logger.exception("Failed to notify: monitor=%s, keyword=%s", monitor_id, keyword)
 
     if action != "NOOP":
-        update_state(monitor_id, "_all", action, count, now_ms)
+        update_state(monitor_id, keyword, fingerprint, action, count, now_ms)
+
+
+def _process_monitor_level(monitor_id, config, global_config, defaults, dispatched, now_ms):
+    """Process results at monitor level (no keywords defined)."""
+    all_events = dispatched.get("_all", [])
+    kw_config = {"severity": config.get("severity", defaults.get("severity", "warning"))}
+    keyword = "_all"
+
+    if not all_events:
+        _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, None, [], now_ms)
+        return
+
+    # Group by fingerprint even at monitor level
+    grouped_events = {}
+    for event in all_events:
+        fp = generate_fingerprint(event.get("message", ""))
+        grouped_events.setdefault(fp, []).append(event)
+
+    for fp, events in grouped_events.items():
+        _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, events, now_ms)

@@ -7,39 +7,67 @@ from log_monitor.constants import get_logs_client
 logger = logging.getLogger(__name__)
 
 
+# Module-level cache for memoization during a single Lambda execution
+_context_cache = {}
+
+
 def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
-    """Fetch N log lines before a given timestamp using GetLogEvents.
+    """Fetch N log lines before and after a given timestamp using GetLogEvents.
+
+    Results are memoized per (log_stream, timestamp_ms) to avoid redundant
+    API calls when the same log line matches multiple keywords.
 
     Args:
         log_group: Log group name.
         log_stream: Log stream name.
         timestamp_ms: Epoch milliseconds of the detected event.
-        num_lines: Number of context lines to retrieve.
+        num_lines: Number of context lines to retrieve (each way).
 
     Returns:
-        List of log message strings (oldest first).
+        List of log message strings.
     """
     if not log_stream or not timestamp_ms or num_lines <= 0:
         return []
 
+    cache_key = f"{log_stream}|{timestamp_ms}"
+    if cache_key in _context_cache:
+        return _context_cache[cache_key]
+
     logs_client = get_logs_client()
+    context = []
 
     try:
-        resp = logs_client.get_log_events(
+        # Fetch BEFORE the target event (endTime = timestamp_ms)
+        resp_before = logs_client.get_log_events(
             logGroupName=log_group,
             logStreamName=log_stream,
             endTime=int(timestamp_ms),
-            limit=num_lines + 1,
+            limit=num_lines + 1,  # +1 in case the target event itself is included
             startFromHead=False,
         )
-
-        events = resp.get("events", [])
-        context = []
-        for event in events:
+        for event in resp_before.get("events", []):
             if event.get("timestamp", 0) < timestamp_ms:
                 context.append(event.get("message", "").rstrip())
 
-        return context[-num_lines:]
+        # Keep only the last N lines before the target
+        context = context[-num_lines:]
+
+        # Add the target line marker
+        context.append("★ " + "-" * 20 + " ★")
+
+        # Fetch AFTER the target event (startTime = timestamp_ms + 1)
+        resp_after = logs_client.get_log_events(
+            logGroupName=log_group,
+            logStreamName=log_stream,
+            startTime=int(timestamp_ms) + 1,
+            limit=num_lines,
+            startFromHead=True,
+        )
+        for event in resp_after.get("events", []):
+            context.append(event.get("message", "").rstrip())
+
+        _context_cache[cache_key] = context
+        return context
 
     except Exception:
         logger.exception(

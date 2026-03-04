@@ -106,6 +106,10 @@ def test_handler_integration(aws_credentials):
     for name in ["slack-critical", "slack-warning", "email-critical", "email-alerts"]:
         sns.create_topic(Name=name)
 
+    # Set up SES verified email
+    ses = boto3.client("ses", region_name="ap-northeast-1")
+    ses.verify_email_identity(EmailAddress="alerts@example.com")
+
     mock_start_query = MagicMock(return_value={"queryId": "test-query-id"})
     mock_get_results = MagicMock(return_value={
         "status": "Complete",
@@ -129,8 +133,11 @@ def test_handler_integration(aws_credentials):
 
         handler({"monitor_ids": ["project-a"]}, None)
 
-    # Verify STATE was created for ERROR keyword
-    resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR"})
+    # Verify STATE was created for ERROR keyword + fingerprint
+    from log_monitor.fingerprint import generate_fingerprint
+    fp = generate_fingerprint("ERROR: test error")
+    
+    resp = table.get_item(Key={"pk": "STATE", "sk": f"project-a#ERROR#{fp}"})
     assert "Item" in resp
     assert resp["Item"]["status"] == "ALARM"
 

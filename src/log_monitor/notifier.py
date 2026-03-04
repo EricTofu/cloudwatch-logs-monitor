@@ -139,7 +139,7 @@ def build_email_payload(subject, body):
     return f"{subject}\n\n{body}"
 
 
-def send_notification(kw_config, monitor_config, global_config, action, events, keyword):
+def send_notification(kw_config, monitor_config, global_config, action, events, keyword, fingerprint=None):
     """Orchestrator: resolve topics → render → publish to Slack + Email.
 
     Args:
@@ -149,6 +149,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         action: State action ("NOTIFY", "RENOTIFY", "RECOVER").
         events: List of matching event dicts.
         keyword: The specific keyword that triggered this notification.
+        fingerprint: (Optional) The message fingerprint used for grouping.
     """
     sns_client = get_sns_client()
 
@@ -163,9 +164,14 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
 
     # Context lines
     context_all = []
-    for e in events[:5]:
-        context_all.extend(e.get("context_lines", []))
-    context_text = "\n".join(context_all) if context_all else "(no context)"
+    for i, e in enumerate(events[:5], 1):
+        ctx_lines = e.get("context_lines", [])
+        if ctx_lines:
+            context_all.append(f"── [Context for Log {i}] ──")
+            context_all.extend(ctx_lines)
+            context_all.append("")  # Blank line for separation
+
+    context_text = "\n".join(context_all).strip() if context_all else "(no context)"
 
     # Stream names
     stream_names = list({e.get("log_stream", "") for e in events})
@@ -174,6 +180,7 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
     base_variables = {
         "display_name": monitor_config.get("display_name", monitor_config.get("sk", "")),
         "keyword": keyword,
+        "fingerprint": fingerprint or "",
         "severity": severity.upper(),
         "count": str(len(events)),
         "detected_at": datetime.now(tz=JST).strftime("%Y-%m-%d %H:%M:%S JST"),
