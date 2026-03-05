@@ -68,11 +68,11 @@ def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
     """
     table = _get_table(table)
     sk_prefix = f"{monitor_id}#{keyword}"
-    
+
     resp = table.query(
         KeyConditionExpression=Key("pk").eq("STATE") & Key("sk").begins_with(sk_prefix)
     )
-    
+
     active_fingerprints = []
     for item in resp.get("Items", []):
         if item.get("status") == "ALARM":
@@ -82,11 +82,11 @@ def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
             elif sk.startswith(sk_prefix + "#"):
                 fp = sk[len(sk_prefix) + 1:]
                 active_fingerprints.append(fp)
-                
+
     return active_fingerprints
 
 
-def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_message=None, table=None):
+def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, original_message=None, table=None):
     """Create or update a STATE record based on the action."""
     table = _get_table(table)
     sk = f"{monitor_id}#{keyword}"
@@ -94,7 +94,7 @@ def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_
         sk += f"#{fingerprint}"
 
     if action == "NOTIFY":
-        if first_message is not None:
+        if original_message is not None:
             table.update_item(
                 Key={"pk": "STATE", "sk": sk},
                 UpdateExpression=(
@@ -103,7 +103,7 @@ def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_
                     "last_notified_at = :now, "
                     "current_streak = :one, "
                     "detection_count = :count, "
-                    "first_message = :first_msg"
+                    "original_message = :original_msg"
                 ),
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
@@ -111,7 +111,7 @@ def update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_
                     ":now": now_ms,
                     ":one": 1,
                     ":count": count,
-                    ":first_msg": first_message,
+                    ":original_msg": original_message,
                 },
             )
         else:

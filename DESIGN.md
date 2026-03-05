@@ -42,7 +42,7 @@
                     │  DynamoDB            │
                     │  ┌───────────────┐   │
                     │  │ GLOBAL CONFIG │   │
-                    │  │ PROJECT (×N)  │   │
+                    │  │ MONITOR (×N)  │   │
                     │  │ STATE (自動)   │   │
                     │  └───────────────┘   │
                     └──────────┬──────────┘
@@ -82,16 +82,15 @@
 
 ### 3.2 ロググループのパターン
 
-プロジェクトは2つのパターンに分かれる：
+プロジェクト（モニター）は2つのパターンに分かれる：
 
-| パターン | ロググループ | ストリーム名 | Insights クエリ |
-|---------|------------|-------------|----------------|
-| **共有型** | `/aws/app/shared-logs` | `project-a/xxx` | `filter @logStream like /project-a/` |
-| **単独型** | `/aws/app/project-c` | `stream-1`, `stream-2` | ストリームフィルタ不要（全ストリーム検索） |
+| パターン | ロググループ | Insights クエリによる検索対象 |
+|---------|------------|----------------|
+| **共有型** | `/aws/app/shared-logs` | `filter @logStream like /project-a/` |
+| **単独型** | `/aws/app/project-c` | ストリームフィルタ不要（全ストリーム検索） |
 
 設定による切り替え:
-- **共有型**: `override_log_group` = null, `log_stream_pattern` = "project-a"
-- **単独型**: `override_log_group` = "/aws/app/project-c", `log_stream_pattern` = null
+DynamoDB の `MONITOR` レコード内で `log_group` を指定し、必要に応じて `query` に `@logStream like ...` を含めることで制御します。
 
 ### 3.3 データフロー
 
@@ -99,28 +98,22 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Lambda 実行フロー（5分ごと）                                          │
 │                                                                      │
-│  ① DynamoDB から GLOBAL + 全 PROJECT + 全 STATE を一括取得            │
+│  ① EventBridge からトリガーされた monitor_ids を受領                 │
 │          │                                                           │
 │          ▼                                                           │
-│  ② プロジェクトごとにスケジュール判定                                   │
-│     schedule_rate_minutes 未到達 → スキップ                            │
+│  ② モニターごとに設定を DynamoDB から個別取得                          │
 │          │                                                           │
 │          ▼                                                           │
-│  ③ Logs Insights クエリ実行                                           │
+│  ③ Logs Insights クエリ実行（モニターごとに逐次）                        │
 │     ┌──────────────────────────────────────────┐                     │
-│     │ for each project:                        │                     │
-│     │   start_query() → 非同期開始              │                     │
-│     │                                          │                     │
-│     │ 全プロジェクトの start_query 完了後、      │                     │
-│     │ バッチで get_query_results をポーリング    │                     │
+│     │ for id in monitor_ids:                   │                     │
+│     │   config = get_monitor_config(id)        │                     │
+│     │   results = execute_query(config)        │                     │
 │     └──────────────────────────────────────────┘                     │
 │          │                                                           │
 │          ▼                                                           │
-│  ④ 除外パターンでフィルタリング                                        │
-│     ┌──────────────────────────────────────────┐                     │
-│     │ クエリ内除外: Insights クエリの filter 句  │                     │
-│     │ アプリ側除外: 正規表現パターン              │                     │
-│     └──────────────────────────────────────────┘                     │
+│  ④ キーワードごとに結果を分類（ディスパッチ）                            │
+│     結果の @message にキーワードが含まれるか判定                        │
 │          │                                                           │
 │          ▼                                                           │
 │  ⑤ コンテキスト取得（設定されている場合）                                │
@@ -140,13 +133,12 @@
 │     ┌─────────────────────────────────────────────┐                  │
 │     │ Slack通知: Chatbot カスタムスキーマ JSON       │                  │
 │     │ Email通知: プレーンテキスト（別 Topic）        │                  │
-│     │ 通知先: MONITOR → PROJECT → GLOBAL の順で解決  │                  │
+│     │ 通知先: MONITOR → GLOBAL の順で解決            │                  │
 │     └─────────────────────────────────────────────┘                  │
 │          │                                                           │
 │          ▼                                                           │
 │  ⑧ DynamoDB STATE 更新 & last_searched_at 更新                       │
 └──────────────────────────────────────────────────────────────────────┘
-```
 
 ### 3.4 将来の移行パス
 
@@ -155,11 +147,11 @@
 
  /aws/app/shared-logs                    /aws/app/project-a ←─┐
       │                                  /aws/app/project-b    │
-  Lambda が log_stream_pattern で              /aws/app/project-c    │
-  プロジェクトを識別して検索                                      │
+  Lambda が query 内の filter              /aws/app/project-c    │
+  @logStream でプロジェクトを識別                                 │
                                           DynamoDB の設定変更のみ │
-                                          override_log_group ────┘
-                                          log_stream_pattern → null
+                                          log_group = /aws/app/... 
+                                          query = (filter削除)
 
                                           Lambda コードは変更なし！
 ```
@@ -174,8 +166,8 @@
 pk              sk                  管理者          説明
 ──────────────  ──────────────────  ──────────────  ──────────────────
 GLOBAL          CONFIG              人間が編集       グローバル設定
-PROJECT         project-a           人間が編集       プロジェクト設定
-PROJECT         project-b           人間が編集       プロジェクト設定
+MONITOR         project-a           人間が編集       モニター設定
+MONITOR         project-b           人間が編集       モニター設定
 STATE           project-a#ERROR     Lambda が自動    状態（人間は触らない）
 STATE           project-a#TIMEOUT   Lambda が自動    状態
 ```
@@ -226,79 +218,59 @@ STATE           project-a#TIMEOUT   Lambda が自動    状態
 }
 ```
 
-### 4.2 PROJECT レコード（1プロジェクト1レコード）
+### 4.2 MONITOR レコード（1モニター1レコード）
 
-#### 共有ロググループ型
+#### 共有ロググループでのキーワード検知型
 
 ```json
 {
-  "pk": "PROJECT",
+  "pk": "MONITOR",
   "sk": "project-a",
 
   "display_name": "Project Alpha",
-  "log_stream_pattern": "project-a",
-  "override_log_group": null,
+  "log_group": "/aws/app/shared-logs",
+  "query": "fields @timestamp, @message, @logStream\n| filter @logStream like /project-a/\n| filter @message like /ERROR|FATAL|TIMEOUT|OOM/\n| sort @timestamp asc\n| limit 500",
   "enabled": true,
 
-  "schedule_rate_minutes": null,
-  "search_window_minutes": null,
+  "search_window_minutes": 7,
   "notify_on_recover": true,
 
-  "exclude_patterns": ["healthcheck", "ping OK"],
-
-  "override_sns_topics": {
-    "critical": "arn:aws:sns:...:project-a-critical"
-  },
-  "ses_config": null,
-
-  "notification_template": null,
-  "recover_template": null,
-
-  "monitors": [
+  "keywords": [
     {
-      "keywords": ["ERROR", "FATAL", "Exception"],
+      "words": ["ERROR", "FATAL", "Exception"],
       "severity": "critical",
-      "exclude_patterns": ["connection reset", "cache miss"],
       "renotify_min": 30,
-      "context_lines": 10,
       "mention": "@channel",
-      "override_sns_topic": null,
-      "notification_template": null
+      "sns_topic": "arn:aws:sns:...:project-a-critical"
     },
     {
-      "keywords": ["TIMEOUT"],
+      "words": ["TIMEOUT"],
       "severity": "warning",
       "renotify_min": "disabled"
     },
     {
-      "keywords": ["OOM"],
+      "words": ["OOM"],
       "severity": "critical",
-      "override_sns_topic": "arn:aws:sns:...:team-b-slack",
-      "notification_template": {
-        "subject": "[OOM] Project Alpha - 緊急",
-        "body": "💀 *OOM 発生！*\n即時対応が必要です\n---\n{log_lines}"
-      }
+      "sns_topic": "arn:aws:sns:...:team-b-slack"
     }
   ]
 }
 ```
 
-#### 単独ロググループ型
+#### 単独ロググループ型（全ログ検索・レポート用途など）
 
 ```json
 {
-  "pk": "PROJECT",
-  "sk": "project-c",
+  "pk": "MONITOR",
+  "sk": "project-c-daily",
 
-  "display_name": "Project Charlie",
-  "log_stream_pattern": null,
-  "override_log_group": "/aws/app/project-c",
+  "display_name": "Project Charlie Daily",
+  "log_group": "/aws/app/project-c",
+  "query": "fields @timestamp, @message, @logStream\n| filter @message like /ERROR|WARN/\n| sort @timestamp asc\n| limit 1000",
   "enabled": true,
 
-  "monitors": [
-    { "keywords": ["ERROR", "FATAL"], "severity": "critical" },
-    { "keywords": ["WARN"],  "severity": "info" }
-  ]
+  "severity": "info",
+  "search_window_minutes": 1440
 }
 ```
 
@@ -363,125 +335,47 @@ fields @timestamp, @message, @logStream
 - クエリ内で処理できない複雑な正規表現はアプリ側で `re.search()` を使用
 - 除外パターンに正規表現メタ文字が含まれる場合はアプリ側にフォールバック
 
-### 5.3 非同期実行戦略
+### 5.3 実行戦略
 
-キーワード結合（§5.4）により、プロジェクト単位で1クエリにまとめる。10プロジェクトなら **10クエリ** で済む。
-
-Logs Insights は非同期API（`start_query` → `get_query_results`）だが、**サーバー側で並列実行**されるため、Python の `asyncio` やマルチスレッドは不要。`start_query` を一斉に発行し、ポーリングで完了を待つだけで効率的に動作する。
-
-```python
-POLL_INTERVAL_SEC = 1
-QUERY_TIMEOUT_SEC = 120  # 最大待機時間
-
-def execute_all_queries(active_projects, global_config, search_start_ms, search_end_ms):
-    logs_client = boto3.client("logs")
-
-    # ──────────────────────────────────────────
-    # Phase 1: start_query の一斉発行（~1-2秒）
-    #   → サーバー側で全クエリが同時に実行開始
-    # ──────────────────────────────────────────
-    pending = {}
-    for project in active_projects:
-        log_group = project.get("override_log_group") or global_config["source_log_group"]
-        query_string = build_combined_query(project, global_config)
-
-        query_id = logs_client.start_query(
-            logGroupName=log_group,
-            startTime=search_start_ms // 1000,  # epoch秒
-            endTime=search_end_ms // 1000,
-            queryString=query_string
-        )["queryId"]
-
-        pending[query_id] = project
-
-    # ──────────────────────────────────────────
-    # Phase 2: 全クエリの完了をポーリング（~5-30秒）
-    # ──────────────────────────────────────────
-    completed = {}
-    start_time = time.time()
-
-    while pending:
-        if time.time() - start_time > QUERY_TIMEOUT_SEC:
-            for qid, proj in pending.items():
-                logger.error("Query timeout: project=%s, query_id=%s", proj["sk"], qid)
-            break
-
-        time.sleep(POLL_INTERVAL_SEC)
-
-        for query_id in list(pending.keys()):
-            resp = logs_client.get_query_results(queryId=query_id)
-            status = resp["status"]
-
-            if status == "Complete":
-                completed[pending[query_id]["sk"]] = {
-                    "project": pending[query_id],
-                    "results": resp["results"]
-                }
-                del pending[query_id]
-            elif status in ("Failed", "Cancelled", "Timeout"):
-                logger.error("Query %s for project %s: %s",
-                             query_id, pending[query_id]["sk"], status)
-                del pending[query_id]
-            # "Running", "Scheduled" → 次のポーリングで再チェック
-
-    return completed
-```
-
-#### 所要時間の比較
-
-| 方式 | 10クエリの所要時間 |
-|------|-------------------|
-| **順次実行** (start → wait → start → wait...) | 10 × 5-10秒 = **50-100秒** |
-| **一斉発行 + ポーリング** (↑の方式) | max(5-10秒) + ポーリング = **10-30秒** |
-
-#### タイムアウト対策
-
-- `QUERY_TIMEOUT_SEC = 120` を超えたらタイムアウト扱い。該当プロジェクトはスキップされるが、`last_searched_at` は更新されないため**次回再検索**される
-- Lambda 自体のタイムアウト（10分）内に十分収まる
-
-#### API 同時実行制限
-
-CloudWatch Logs Insights は **アカウントあたり同時 30 クエリ** の制限がある。現状10プロジェクトなら問題ないが、将来30超の場合はバッチ分割する：
+EventBridge から対象の `monitor_ids` が渡され、Lambda はこれらを **順次処理** します。
+各モニターは独立した Insights クエリ（DynamoDB に定義された文字列そのまま）を実行します。
 
 ```python
-BATCH_SIZE = 25  # 30制限に対してマージン確保
+def process_monitor(monitor_id, global_config, search_end_ms):
+    monitor_config = get_monitor_config(monitor_id)
+    if not monitor_config.get("enabled", True):
+        return
 
-def execute_in_batches(projects, ...):
-    all_results = {}
-    for i in range(0, len(projects), BATCH_SIZE):
-        batch = projects[i:i + BATCH_SIZE]
-        results = execute_all_queries(batch, ...)
-        all_results.update(results)
-    return all_results
+    # モニター固有のロググループとクエリ
+    log_group = monitor_config["log_group"]
+    query_string = monitor_config["query"]
+    search_window = monitor_config["search_window_minutes"]
+
+    search_start_ms = search_end_ms - (search_window * 60 * 1000)
+
+    # 1. クエリ実行 (同期的に完了を待機)
+    raw_results = execute_query(log_group, query_string, search_start_ms, search_end_ms)
+
+    # 2. 結果の分類 (ディスパッチ)
+    keywords_config = monitor_config.get("keywords")
+    dispatched_events = dispatch_results(raw_results, keywords_config)
+
+    # 3. 状態評価・通知送信
+    for keyword, events in dispatched_events.items():
+        # ...
 ```
 
-### 5.4 プロジェクト単位のキーワード結合
+#### API制限とパフォーマンス
+- 順次実行するため、Insights の **アカウントあたり同時 30 クエリ** 制限を気にする必要がありません。
+- 1クエリあたり平均5-10秒かかるため、対象モニターが多い場合はEventBridgeのルールを論理的に分割し（例: `frontend-monitors`, `backend-monitors`）、複数のLambdaを並行稼働させることでスケールします。
 
-同一プロジェクトの全 monitors の `keywords` をフラットに展開し、1つの Insights クエリにまとめる。
+### 5.4 ディスパッチとキーワード分類
 
-```
-fields @timestamp, @message, @logStream
-| filter @logStream like /project-a/
-| filter (
-    @message like /ERROR/
-    or @message like /FATAL/
-    or @message like /Exception/
-    or @message like /TIMEOUT/
-    or @message like /OOM/
-  )
-| sort @timestamp asc
-| limit 500
-```
-
-結果はアプリ側でキーワードごとに振り分け、各キーワードの STATE を独立して更新する。
+1つのクエリ結果（`raw_results`）に対し、`dispatch_results` 関数が各行の `@message` と `keywords` 設定内の `words` を突き合わせ、インメモリで振り分けます。
 
 **メリット**:
-- 10プロジェクト × 1クエリ = **10クエリ** で済む（同時30制限内）
-- 同じデータを複数回スキャンしないため**コスト削減**
-
-**デメリット**:
-- アプリ側でのキーワード振り分けロジックが必要
-- `limit` をキーワード数に応じて増やす必要がある
+- モニター内の複数キーワード（例: ERRORとFATAL）を1回のクエリで取得し、AWSコストと実行時間を削減します。
+- 振り分け後にそれぞれのキーワードに対して個別の状態遷移（ALARM/OK）を管理できます。
 
 ## 6. カスタマイズ詳細
 
@@ -509,16 +403,16 @@ Email通知先:
 ### 6.2 通知内容の解決（3段階フォールバック）
 
 ```
-  1. MONITOR の notification_template  ← キーワード固有テンプレート
-  2. PROJECT の notification_template  ← プロジェクト固有テンプレート
-  3. GLOBAL の notification_template   ← デフォルトテンプレート
+  1. 定義済みのテンプレート（引数等で指定された場合）
+  2. GLOBAL の notification_template   ← デフォルトテンプレート
 ```
 
 **テンプレート変数**:
 
 | 変数 | 内容 |
 |------|------|
-| `{project}` | プロジェクト表示名 |
+| `{display_name}` | プロケクト・モニターの表示名 |
+| `{monitor_id}` | モニターID |
 | `{keyword}` | 検出キーワード |
 | `{severity}` | 緊急度 |
 | `{count}` | 今回の検出数 |
@@ -741,7 +635,7 @@ cloudwatch-logs-monitor/
 │       ├── config.py           # DynamoDB 設定読み込み
 │       ├── query.py            # Logs Insights クエリ構築＆実行
 │       ├── context.py          # GetLogEvents でコンテキスト取得
-│       ├── exclusion.py        # 除外パターンフィルタリング
+│       ├── fingerprint.py      # IP/UUID等のマスキング・ハッシュ化
 │       ├── state.py            # 状態遷移ロジック
 │       ├── notifier.py         # SNS通知（Chatbotスキーマ）+ SES Email
 │       └── constants.py        # 共有定数（JST, テーブル名等）

@@ -22,7 +22,7 @@ def mask_message(message: str) -> str:
     """Mask dynamic content in a log message so it can be grouped with similar messages."""
     if not message:
         return ""
-    
+
     masked = message
     for pattern, replacement in MASKS:
         masked = pattern.sub(replacement, masked)

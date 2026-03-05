@@ -76,3 +76,143 @@
 3. **全体設定 (`GLOBAL#CONFIG`)** : 上のどちらでも指定されていない場合に使われる最終的なデフォルト設定
 
 基本的には `GLOBAL#CONFIG` にSlackへの通知ARNやデフォルトルールを記載しておき、特定の重要なエラーキーワードや特定プロジェクトだけ別の宛先に流す、といった柔軟な設定が可能です。
+
+---
+
+## 3. CloudWatch Logs Insights クエリの書き方
+
+モニター設定の `query` フィールドに記述する Logs Insights クエリの構文です。
+
+### 基本構造
+
+```
+fields @timestamp, @message, @logStream
+| filter @logStream like /project-a/
+| filter @message like /ERROR/
+| sort @timestamp asc
+| limit 500
+```
+
+> **重要**: 当システムでは `@timestamp`, `@message`, `@logStream` の3フィールドを使用するため、`fields` には必ずこの3つを含めてください。
+
+### フィルタリング（包含）
+
+```
+# 単一キーワード
+| filter @message like /ERROR/
+
+# 複数キーワード（OR）
+| filter (@message like /ERROR/ or @message like /FATAL/ or @message like /TIMEOUT/)
+
+# 正規表現でまとめて記述
+| filter @message like /ERROR|FATAL|TIMEOUT/
+
+# ログストリームでフィルタ
+| filter @logStream like /project-a/
+```
+
+### フィルタリング（除外）
+
+```
+# 特定文字列を除外
+| filter @message not like /HealthCheck/
+
+# 複数の除外
+| filter @message not like /HealthCheck/
+    and @message not like /heartbeat/
+
+# 正規表現で複数パターンをまとめて除外
+| filter @message not like /HealthCheck|heartbeat|ping/
+
+# 完全一致で除外
+| filter @message != "specific exact message"
+```
+
+### ⚠️ 正規表現の特殊文字エスケープ
+
+`like` / `not like` の `/パターン/` 内は**正規表現**として解釈されます。以下の文字はエスケープが必要です。
+
+| 文字 | エスケープ | 説明 |
+| :--- | :--- | :--- |
+| `[` | `\[` | 文字クラスの開始 |
+| `]` | `\]` | 文字クラスの終了 |
+| `(` | `\(` | グループの開始 |
+| `)` | `\)` | グループの終了 |
+| `.` | `\.` | 任意の1文字 |
+| `*` | `\*` | 前の文字の0回以上 |
+| `+` | `\+` | 前の文字の1回以上 |
+| `?` | `\?` | 前の文字の0回または1回 |
+| `{` | `\{` | 量指定子 |
+| `\` | `\\` | エスケープ文字自体 |
+
+**よくある例: JSON の角括弧を含むパターン**
+
+```
+# ❌ NG: [] が正規表現の「空の文字クラス」として解釈される
+| filter @message not like /"failed_results":[]/
+
+# ✅ OK: 角括弧をエスケープ
+| filter @message not like /"failed_results":\[\]/
+```
+
+### クエリ例
+
+**基本的なエラー監視（5分ごと）:**
+```
+fields @timestamp, @message, @logStream
+| filter @logStream like /project-a/
+| filter (@message like /ERROR/ or @message like /FATAL/)
+| sort @timestamp asc
+| limit 500
+```
+
+**除外パターン付き（特定の既知エラーをスキップ）:**
+```
+fields @timestamp, @message, @logStream
+| filter @message like /ERROR/
+| filter @message not like /HealthCheck/
+| filter @message not like /"failed_results":\[\]/
+| sort @timestamp asc
+| limit 500
+```
+
+**日次バッチ監視（`search_window_minutes: 1450` と併用）:**
+```
+fields @timestamp, @message, @logStream
+| filter @message like /ERROR|WARN/
+| sort @timestamp asc
+| limit 1000
+```
+
+---
+
+## 4. 通知テンプレート変数
+
+`notification_template` および `recover_template` の `subject` / `body` で使用できる変数です。
+
+| 変数 | 説明 | 例 |
+| :--- | :--- | :--- |
+| `{display_name}` | モニターの表示名 | `Project Alpha` |
+| `{keyword}` | 検知されたキーワード | `ERROR` |
+| `{severity}` | 深刻度（大文字） | `CRITICAL` |
+| `{count}` | 検知されたログ行数 | `5` |
+| `{detected_at}` | 検知日時（JST） | `2026-03-05 15:00:00 JST` |
+| `{log_group}` | 対象ロググループ名 | `/aws/app/shared-logs` |
+| `{stream_name}` | ログストリーム名（最大3つ） | `stream-1` |
+| `{log_lines}` | 検知されたログ行（ページ分割済み） | `[1] 2026-03-05T15:00:00 ERROR ...` |
+| `{context_lines}` | エラー前後のコンテキスト行 | `── [Context for Log 1] ──` |
+| `{fingerprint}` | ログメッセージのフィンガープリント | `a1b2c3d4` |
+| `{original_message}` | 最初に検知された元のログメッセージ | `ERROR: Connection refused` |
+| `{mention}` | メンション先（Slack IDなど） | `<@U12345>` |
+
+---
+
+## 5. Slack (Chatbot) 通知のページネーション
+
+AWS Chatbot の `description` フィールドは **4096文字制限** があります。ログ行が多い場合、システムは自動的にページ分割して送信します。
+
+- **ページ1**: コンテキスト行 + ログ行（制限内に収まる分）
+- **ページ2以降**: ログ行のみ（コンテキストは `(see page 1)` と表示）
+- 通知タイトルに `(1/2)`, `(2/2)` のようにページ番号が付与されます
+- コンテキストが非常に大きい場合、ページ1のログ行数が少なくなります（コンテキストを優先保持）
+

@@ -34,6 +34,7 @@ Lambda → DynamoDB (MONITOR設定 + 生クエリ読み取り)
 │   ├── config.py          # DynamoDB CRUD
 │   ├── query.py           # Insights クエリ実行 + 結果振り分け
 │   ├── context.py         # 前後ログ行取得
+│   ├── fingerprint.py     # IP/UUID等のマスキング・ハッシュ化による重複抑制
 │   ├── state.py           # 状態遷移ロジック
 │   ├── notifier.py        # SNS + SES 通知
 │   └── constants.py       # 定数
@@ -41,6 +42,8 @@ Lambda → DynamoDB (MONITOR設定 + 生クエリ読み取り)
 ├── terraform/
 ├── scripts/
 ├── DESIGN.md
+├── README.md
+├── dynamodb_config_reference.md
 └── API_REFERENCE.md
 ```
 
@@ -86,7 +89,7 @@ uv run python scripts/seed_dynamodb.py your-profile
 
 ## DynamoDB 設定例
 
-### MONITOR レコード（キーワード付き）
+### MONITOR レコード（キーワード検知型）
 
 ```json
 {
