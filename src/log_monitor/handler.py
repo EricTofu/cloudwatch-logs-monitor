@@ -110,32 +110,38 @@ def _process_keywords(monitor_id, config, global_config, defaults, dispatched, n
             # Fetch active alarms for this monitor/keyword
             active_fps = get_active_alarm_fingerprints(monitor_id, keyword)
 
+            # Map to aggregate by category: "NOTIFY" (NOTIFY + RENOTIFY) and "RECOVER"
+            aggregated_events = {
+                "NOTIFY": [],
+                "RECOVER": []
+            }
+
             if not all_events:
                 # Still need to check for RECOVER action even if 0 events
                 if active_fps:
                     for fp in active_fps:
-                        _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms)
+                        _evaluate_and_aggregate(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms, aggregated_events)
                 else:
-                    _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, None, [], now_ms)
-                continue
+                    _evaluate_and_aggregate(monitor_id, config, global_config, kw_group, keyword, None, [], now_ms, aggregated_events)
+            else:
+                # Group events by fingerprint
+                grouped_events = {}
+                for event in all_events:
+                    fp = generate_fingerprint(event.get("message", ""))
+                    grouped_events.setdefault(fp, []).append(event)
+    
+                for fp, events in grouped_events.items():
+                    _evaluate_and_aggregate(monitor_id, config, global_config, kw_group, keyword, fp, events, now_ms, aggregated_events)
+                    
+                # Evaluate any active fingerprints that do not have events right now
+                for fp in active_fps:
+                    if fp not in grouped_events:
+                        _evaluate_and_aggregate(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms, aggregated_events)
 
-            # Group events by fingerprint
-            grouped_events = {}
-            for event in all_events:
-                fp = generate_fingerprint(event.get("message", ""))
-                grouped_events.setdefault(fp, []).append(event)
+            _notify_aggregated(monitor_id, config, global_config, kw_group, keyword, aggregated_events)
 
-            for fp, events in grouped_events.items():
-                _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, events, now_ms)
-                
-            # Evaluate any active fingerprints that do not have events right now
-            for fp in active_fps:
-                if fp not in grouped_events:
-                    _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fp, [], now_ms)
-
-
-def _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, fingerprint, events, now_ms):
-    """Evaluate state and send notification for a specific keyword + fingerprint."""
+def _evaluate_and_aggregate(monitor_id, config, global_config, kw_group, keyword, fingerprint, events, now_ms, aggregated_events):
+    """Evaluate state and add to aggregated events WITHOUT notifying yet."""
     if events:
         events = enrich_with_context(events, config, global_config)
 
@@ -145,29 +151,67 @@ def _evaluate_and_notify(monitor_id, config, global_config, kw_group, keyword, f
 
     logger.info(
         "Monitor=%s, Keyword=%s, Fingerprint=%s, Count=%d, Action=%s",
-        monitor_id,
-        keyword,
-        fingerprint,
-        count,
-        action,
+        monitor_id, keyword, fingerprint, count, action,
     )
 
     first_message = events[0].get("message", "(No message extracted)") if events else None
     
     if action in ("NOTIFY", "RENOTIFY", "RECOVER"):
         original_message = state.get("first_message") if state else None
-        # On NOTIFY, the state might not exist yet, so we use the incoming message
         if action == "NOTIFY" and first_message:
             original_message = first_message
 
-        try:
-            send_notification(kw_group, config, global_config, action, events, keyword, fingerprint, original_message)
-        except Exception:
-            logger.exception("Failed to notify: monitor=%s, keyword=%s", monitor_id, keyword)
+        # Determine category for aggregation
+        category = "NOTIFY" if action in ("NOTIFY", "RENOTIFY") else "RECOVER"
+        
+        # We store the events, but we also want to keep track of the original_message if needed.
+        # Since events might be multiple, we append them to the category's event list.
+        # However, to preserve fingerprint/original_message context in the notification (if desired),
+        # we can attach them to the events or handle them in the notifier. The current 
+        # notifier expects events, fingerprint(string), original_message(string).
+        # We will bundle them in the events list as custom fields, or just pass a combined string.
+        
+        for event in events:
+            # We want each event to carry its fingerprint and original_message for debugging/context
+            event["_fingerprint"] = fingerprint
+            event["_original_message"] = original_message
+            aggregated_events[category].append(event)
+            
+        # For RECOVER, there are usually 0 events, but we still need to send the notification
+        # containing the original message that recovered.
+        if action == "RECOVER" and not events:
+            # Create a "dummy" event to carry the original message so it shows up in context
+            aggregated_events[category].append({
+                "message": f"Recovered: {original_message}",
+                "timestamp": "",
+                "_fingerprint": fingerprint,
+                "_original_message": original_message
+            })
 
     if action != "NOOP":
         update_state(monitor_id, keyword, fingerprint, action, count, now_ms, first_message)
 
+def _notify_aggregated(monitor_id, config, global_config, kw_group, keyword, aggregated_events):
+    """Send consolidated notifications for grouped categories."""
+    for category, events in aggregated_events.items():
+        if not events:
+            continue
+            
+        try:
+            # We pass multiple fingerprints/original_messages combined or just omit them 
+            # if the notifier relies primarily on events for the body.
+            # Let's collect unique fingerprints and original messages to pass along.
+            unique_fps = list(dict.fromkeys(e.get("_fingerprint", "") for e in events if e.get("_fingerprint")))
+            fp_str = ", ".join(unique_fps)
+            
+            # Use the first original message or combine them if needed
+            om_str = events[0].get("_original_message", "") if events else ""
+            
+            # The action passed to `send_notification` determines the template, so 
+            # category "NOTIFY" uses notification_template, "RECOVER" uses recover_template.
+            send_notification(kw_group, config, global_config, category, events, keyword, fp_str, om_str)
+        except Exception:
+            logger.exception("Failed to notify aggregated: monitor=%s, keyword=%s, category=%s", monitor_id, keyword, category)
 
 def _process_monitor_level(monitor_id, config, global_config, defaults, dispatched, now_ms):
     """Process results at monitor level (no keywords defined)."""
@@ -177,23 +221,29 @@ def _process_monitor_level(monitor_id, config, global_config, defaults, dispatch
     
     active_fps = get_active_alarm_fingerprints(monitor_id, keyword)
 
+    aggregated_events = {
+        "NOTIFY": [],
+        "RECOVER": []
+    }
+
     if not all_events:
         if active_fps:
             for fp in active_fps:
-                _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms)
+                _evaluate_and_aggregate(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms, aggregated_events)
         else:
-            _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, None, [], now_ms)
-        return
+            _evaluate_and_aggregate(monitor_id, config, global_config, kw_config, keyword, None, [], now_ms, aggregated_events)
+    else:
+        # Group by fingerprint even at monitor level
+        grouped_events = {}
+        for event in all_events:
+            fp = generate_fingerprint(event.get("message", ""))
+            grouped_events.setdefault(fp, []).append(event)
+    
+        for fp, events in grouped_events.items():
+            _evaluate_and_aggregate(monitor_id, config, global_config, kw_config, keyword, fp, events, now_ms, aggregated_events)
+    
+        for fp in active_fps:
+            if fp not in grouped_events:
+                _evaluate_and_aggregate(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms, aggregated_events)
 
-    # Group by fingerprint even at monitor level
-    grouped_events = {}
-    for event in all_events:
-        fp = generate_fingerprint(event.get("message", ""))
-        grouped_events.setdefault(fp, []).append(event)
-
-    for fp, events in grouped_events.items():
-        _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, events, now_ms)
-
-    for fp in active_fps:
-        if fp not in grouped_events:
-            _evaluate_and_notify(monitor_id, config, global_config, kw_config, keyword, fp, [], now_ms)
+    _notify_aggregated(monitor_id, config, global_config, kw_config, keyword, aggregated_events)

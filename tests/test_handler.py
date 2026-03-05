@@ -231,7 +231,7 @@ def test_recovery_with_fingerprints(aws_credentials):
         mock_notify.assert_called_once()
         call_args = mock_notify.call_args[0]
         assert call_args[3] == "RECOVER"
-        assert call_args[6] == "test_fp_123"
+        assert "test_fp_123" in call_args[6]
 
         # Check DynamoDB that state is now OK
         resp = table.get_item(Key={"pk": "STATE", "sk": "project-a#ERROR#test_fp_123"})
