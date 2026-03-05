@@ -157,23 +157,23 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
 
     severity = _resolve_severity(kw_config, monitor_config, global_config)
 
-    # Format log lines with timestamps
-    log_line_parts = []
+    # Build per-log entries: (log_line_str, context_str)
+    log_entries = []
     for i, e in enumerate(events[:50], 1):
         ts = e.get("timestamp", "")
         msg = e.get("message", "").rstrip()
-        log_line_parts.append(f"[{i}] {ts}  {msg}")
+        log_line = f"[{i}] {ts}  {msg}"
 
-    # Context lines
-    context_all = []
-    for i, e in enumerate(events[:5], 1):
-        ctx_lines = e.get("context_lines", [])
-        if ctx_lines:
-            context_all.append(f"── [Context for Log {i}] ──")
-            context_all.extend(ctx_lines)
-            context_all.append("")  # Blank line for separation
+        # Context only for first 5 events
+        ctx_str = ""
+        if i <= 5:
+            ctx_lines = e.get("context_lines", [])
+            if ctx_lines:
+                ctx_parts = [f"── [Context for Log {i}] ──"]
+                ctx_parts.extend(ctx_lines)
+                ctx_str = "\n".join(ctx_parts)
 
-    context_text = "\n".join(context_all).strip() if context_all else "(no context)"
+        log_entries.append((log_line, ctx_str))
 
     # Stream names
     stream_names = list({e.get("log_stream", "") for e in events})
@@ -197,8 +197,8 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
     # ── Slack notification (Chatbot) — paginate log lines ──
     slack_topic = resolve_sns_topic(kw_config, monitor_config, global_config)
     if slack_topic:
-        # Split log_lines into pages that fit within Chatbot's 4096-char limit
-        log_pages = _split_log_lines_pages(log_line_parts, context_text, template, base_variables)
+        # Split log entries into pages that fit within Chatbot's 4096-char limit
+        log_pages = _split_log_lines_pages(log_entries, template, base_variables)
         total_pages = len(log_pages)
 
         for page_num, (page_log_lines, page_context) in enumerate(log_pages, 1):
@@ -236,10 +236,12 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
     ses_recipients = resolve_ses_recipients(kw_config, monitor_config, global_config)
     ses_from = resolve_ses_from(monitor_config, global_config)
     if ses_recipients and ses_from:
+        all_log_lines = "\n\n".join(line for line, _ in log_entries)
+        all_contexts = "\n\n".join(ctx for _, ctx in log_entries if ctx)
         variables = {
             **base_variables,
-            "log_lines": "\n\n".join(log_line_parts),
-            "context_lines": context_text,
+            "log_lines": all_log_lines,
+            "context_lines": all_contexts or "(no context)",
         }
         rendered = render_message(template, variables)
         email_body = build_email_payload(rendered["subject"], rendered["body"])
@@ -272,11 +274,13 @@ def send_notification(kw_config, monitor_config, global_config, action, events, 
         )
 
 
-def _split_log_lines_pages(log_line_parts, context_text, template, base_variables):
-    """Split log lines into pages that fit within Chatbot's description limit.
+def _split_log_lines_pages(log_entries, template, base_variables):
+    """Split log entries into pages that fit within Chatbot's description limit.
 
-    Returns list of (log_lines_str, context_str) tuples.
-    Page 1 includes context, subsequent pages have log lines only.
+    Each log entry is a (log_line_str, context_str) tuple. Log bodies and their
+    corresponding context are always kept on the same page.
+
+    Returns list of (page_log_lines_str, page_context_str) tuples.
     """
     max_desc = 3800  # Chatbot limit is 4096, leave room for JSON wrapper
 
@@ -285,48 +289,54 @@ def _split_log_lines_pages(log_line_parts, context_text, template, base_variable
     test_rendered = render_message(template, test_vars)
     header_size = len(test_rendered["body"])
 
-    # Page 1 needs room for context text, other pages don't
-    context_cost = len(context_text) if context_text else 0
-    available_first = max_desc - header_size - context_cost
-    available_rest = max_desc - header_size
-    if available_first < 0:
-        # Context alone exceeds budget — truncate context to fit
-        max_context = max_desc - header_size - 200  # reserve 200 for at least 1 log line
-        if max_context > 0:
-            context_text = context_text[:max_context] + "\n…(truncated)"
-            context_cost = len(context_text)
-            available_first = max_desc - header_size - context_cost
-        else:
-            context_text = "(context omitted — too large)"
-            context_cost = len(context_text)
-            available_first = max_desc - header_size - context_cost
-    # available_first may be small (< 200) — that's fine, page 1 will just
-    # have fewer log lines and the rest overflow to subsequent pages.
-    if available_rest < 200:
-        available_rest = 200  # absolute minimum
+    available = max_desc - header_size
+    if available < 200:
+        available = 200  # absolute minimum
 
     pages = []
-    current_lines = []
+    current_lines = []   # log line strings for current page
+    current_ctxs = []    # context strings for current page
     current_len = 0
 
-    for line in log_line_parts:
-        line_len = len(line) + 1
-        available = available_first if not pages else available_rest
-        if current_len + line_len > available and current_lines:
-            ctx = context_text if not pages else "(see page 1)"
-            pages.append(("\n".join(current_lines), ctx))
-            current_lines = [line]
-            current_len = line_len
-        else:
-            current_lines.append(line)
-            current_len += line_len
+    for log_line, ctx_str in log_entries:
+        # Cost of this entry: log line + context (if any)
+        entry_cost = len(log_line) + 1  # +1 for newline
+        if ctx_str:
+            entry_cost += len(ctx_str) + 1  # +1 for newline
 
+        # If adding this entry would exceed the budget, flush current page
+        if current_len + entry_cost > available and current_lines:
+            pages.append((
+                "\n".join(current_lines),
+                "\n".join(c for c in current_ctxs if c) or "",
+            ))
+            current_lines = []
+            current_ctxs = []
+            current_len = 0
+
+        # If a single entry exceeds the full page budget, truncate its context
+        if entry_cost > available and not current_lines:
+            max_ctx = available - len(log_line) - 50  # reserve room
+            if max_ctx > 0 and ctx_str:
+                ctx_str = ctx_str[:max_ctx] + "\n…(truncated)"
+            elif ctx_str:
+                ctx_str = ""  # drop context entirely
+            entry_cost = len(log_line) + 1 + (len(ctx_str) + 1 if ctx_str else 0)
+
+        current_lines.append(log_line)
+        if ctx_str:
+            current_ctxs.append(ctx_str)
+        current_len += entry_cost
+
+    # Flush remaining entries
     if current_lines:
-        ctx = context_text if not pages else "(see page 1)"
-        pages.append(("\n".join(current_lines), ctx))
+        pages.append((
+            "\n".join(current_lines),
+            "\n".join(c for c in current_ctxs if c) or "",
+        ))
 
     if not pages:
-        pages.append(("(no log lines)", context_text))
+        pages.append(("(no log lines)", ""))
 
     return pages
 

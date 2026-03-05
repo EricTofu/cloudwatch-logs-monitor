@@ -158,73 +158,108 @@ class TestSplitLogLinesPages:
         "mention": "",
     }
 
+    def _make_entries(self, count, line_pad=100, with_context=True, ctx_limit=5):
+        """Helper: build log_entries list of (log_line, context_str) tuples."""
+        entries = []
+        for i in range(1, count + 1):
+            log_line = f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * line_pad
+            ctx = ""
+            if with_context and i <= ctx_limit:
+                ctx = f"── [Context for Log {i}] ──\nContext line for log {i}"
+            entries.append((log_line, ctx))
+        return entries
+
     def test_normal_pagination(self):
-        """Multiple log lines split across pages."""
-        # Create lines that total > 3800 chars after header
-        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * 100 for i in range(30)]
-        context = "── [Context for Log 1] ──\nSome context line"
-        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+        """Multiple log entries split across pages."""
+        entries = self._make_entries(30)
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
 
         assert len(pages) >= 2
-        # Page 1 should have context
-        assert pages[0][1] == context
-        # Page 2+ should say "(see page 1)"
-        for _, ctx in pages[1:]:
-            assert ctx == "(see page 1)"
+        # All pages should have their own content (no "see page 1")
+        for log_lines_str, ctx_str in pages:
+            assert "(see page 1)" not in ctx_str
 
-    def test_page1_body_within_limit(self):
-        """Page 1 rendered body must stay within max_desc (3800)."""
-        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message {i} " + "x" * 100 for i in range(30)]
-        context = "── [Context for Log 1] ──\n" + "Context line\n" * 50
-        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+    def test_log_and_context_stay_paired(self):
+        """Each page's context corresponds to the log bodies on that page."""
+        # Large context per log to force pagination
+        entries = []
+        for i in range(1, 11):
+            log_line = f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * 100
+            ctx = ""
+            if i <= 5:
+                ctx = f"── [Context for Log {i}] ──\n" + f"Context line for log {i}\n" * 30
+            entries.append((log_line, ctx))
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
 
-        # Render page 1 and check body length
-        vars_p1 = {**self.BASE_VARS, "log_lines": pages[0][0], "context_lines": pages[0][1]}
-        rendered_p1 = render_message(self.TEMPLATE, vars_p1)
-        assert len(rendered_p1["body"]) <= 3800, (
-            f"Page 1 body is {len(rendered_p1['body'])} chars, exceeds 3800"
-        )
+        assert len(pages) >= 2
+        for log_lines_str, ctx_str in pages:
+            # Extract log numbers from log lines on this page
+            import re
+            log_nums = re.findall(r"\[(\d+)\]", log_lines_str)
+            # Each context header should match a log on this page
+            ctx_nums = re.findall(r"Context for Log (\d+)", ctx_str)
+            for cn in ctx_nums:
+                assert cn in log_nums, (
+                    f"Context for Log {cn} on page without its log body"
+                )
 
-    def test_large_context_truncated_when_exceeds_budget(self):
-        """When context alone exceeds the budget, it should be truncated."""
-        log_lines = ["[1] 2026-01-01T00:00:00  Error message"]
-        huge_context = "X" * 4000  # bigger than max_desc
-        pages = _split_log_lines_pages(log_lines, huge_context, self.TEMPLATE, self.BASE_VARS)
+    def test_page_body_within_limit(self):
+        """Each page rendered body must stay within max_desc (3800)."""
+        entries = self._make_entries(30)
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
 
-        # Context on page 1 should be truncated
-        assert "truncated" in pages[0][1] or "omitted" in pages[0][1]
+        for page_log_lines, page_ctx in pages:
+            vars_p = {**self.BASE_VARS, "log_lines": page_log_lines, "context_lines": page_ctx}
+            rendered = render_message(self.TEMPLATE, vars_p)
+            assert len(rendered["body"]) <= 3800, (
+                f"Page body is {len(rendered['body'])} chars, exceeds 3800"
+            )
 
-        # Rendered body should still be within limit
-        vars_p1 = {**self.BASE_VARS, "log_lines": pages[0][0], "context_lines": pages[0][1]}
-        rendered_p1 = render_message(self.TEMPLATE, vars_p1)
-        assert len(rendered_p1["body"]) <= 3800
+    def test_large_context_truncated(self):
+        """When a single entry's context exceeds the page budget, it should be truncated."""
+        huge_ctx = "X" * 4000
+        entries = [("[1] 2026-01-01T00:00:00  Error message", huge_ctx)]
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
+
+        # Context should be truncated or dropped
+        assert "truncated" in pages[0][1] or pages[0][1] == ""
 
     def test_single_page_when_fits(self):
         """When everything fits in one page, no pagination needed."""
-        log_lines = ["[1] 2026-01-01T00:00:00  Short error"]
-        context = "Brief context"
-        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+        entries = [("[1] 2026-01-01T00:00:00  Short error", "Brief context")]
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
 
         assert len(pages) == 1
-        assert pages[0][1] == context
+        assert "Brief context" in pages[0][1]
 
-    def test_empty_log_lines(self):
-        """Empty log lines should return a single page with '(no log lines)'."""
-        pages = _split_log_lines_pages([], "some context", self.TEMPLATE, self.BASE_VARS)
+    def test_empty_log_entries(self):
+        """Empty log entries should return a single page with '(no log lines)'."""
+        pages = _split_log_lines_pages([], self.TEMPLATE, self.BASE_VARS)
         assert len(pages) == 1
         assert pages[0][0] == "(no log lines)"
-        assert pages[0][1] == "some context"
 
-    def test_small_available_first_preserves_context(self):
-        """When available_first is small but >= 0, context should be fully preserved."""
-        # Use moderate context that leaves only a small budget for log lines
-        moderate_context = "C" * 2500
-        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * 80 for i in range(20)]
-        pages = _split_log_lines_pages(log_lines, moderate_context, self.TEMPLATE, self.BASE_VARS)
+    def test_no_context_entries(self):
+        """Entries without context should paginate correctly with full budget for log lines."""
+        entries = self._make_entries(20, line_pad=100, with_context=False)
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
 
-        # Page 1 context should be the full original context (not truncated)
-        assert pages[0][1] == moderate_context
-        # Should have multiple pages since page 1 has little room for log lines
-        assert len(pages) >= 2
+        for log_lines_str, ctx_str in pages:
+            assert ctx_str == ""  # No context at all
+            assert len(log_lines_str) > 0
+
+    def test_mixed_context_entries(self):
+        """Mix of entries with and without context; contexts stay paired."""
+        entries = self._make_entries(10, line_pad=200, with_context=True, ctx_limit=3)
+        pages = _split_log_lines_pages(entries, self.TEMPLATE, self.BASE_VARS)
+
+        # Logs 4+ should never have context headers
+        for log_lines_str, ctx_str in pages:
+            import re
+            log_nums = set(re.findall(r"\[(\d+)\]", log_lines_str))
+            ctx_nums = set(re.findall(r"Context for Log (\d+)", ctx_str))
+            # Only logs 1-3 can have context
+            for cn in ctx_nums:
+                assert int(cn) <= 3
+                assert cn in log_nums
 
 
