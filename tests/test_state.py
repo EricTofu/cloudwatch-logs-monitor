@@ -13,15 +13,20 @@ GLOBAL_CONFIG = {"defaults": DEFAULTS}
 
 
 def test_resolve_renotify_min_explicit():
-    assert resolve_renotify_min({"renotify_min": 30}, DEFAULTS) == 30
+    assert resolve_renotify_min({"renotify_min": 30}, {}, DEFAULTS) == 30
 
 
 def test_resolve_renotify_min_disabled():
-    assert resolve_renotify_min({"renotify_min": "disabled"}, DEFAULTS) is None
+    assert resolve_renotify_min({"renotify_min": "disabled"}, {}, DEFAULTS) is None
 
 
 def test_resolve_renotify_min_fallback():
-    assert resolve_renotify_min({}, DEFAULTS) == 60
+    assert resolve_renotify_min({}, {}, DEFAULTS) == 60
+
+
+def test_resolve_renotify_min_monitor_fallback():
+    """kw_config has no renotify_min → fallback to monitor_config."""
+    assert resolve_renotify_min({}, {"renotify_min": 120}, DEFAULTS) == 120
 
 
 def test_resolve_notify_on_recover_override():

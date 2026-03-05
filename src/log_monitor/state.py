@@ -6,15 +6,21 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def resolve_renotify_min(kw_config, defaults):
+def resolve_renotify_min(kw_config, monitor_config, defaults):
     """Resolve renotify_min with fallback logic.
 
-    - Explicit value → use it
+    - Keyword config → use it
     - "disabled" → None (no re-notification)
+    - Key absent → fallback to MONITOR config
     - Key absent → fallback to GLOBAL defaults
     """
     if "renotify_min" in kw_config:
         value = kw_config["renotify_min"]
+        if value == "disabled":
+            return None
+        return value
+    if "renotify_min" in monitor_config:
+        value = monitor_config["renotify_min"]
         if value == "disabled":
             return None
         return value
@@ -52,7 +58,7 @@ def evaluate_state(state, count, kw_config, monitor_config, global_config):
     defaults = global_config.get("defaults", {})
     status = state.get("status", "OK") if state else "OK"
 
-    renotify = resolve_renotify_min(kw_config, defaults)
+    renotify = resolve_renotify_min(kw_config, monitor_config, defaults)
     notify_on_recover = resolve_notify_on_recover(monitor_config, defaults)
 
     if count > 0:

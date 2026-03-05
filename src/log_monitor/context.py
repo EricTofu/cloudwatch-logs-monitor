@@ -12,7 +12,11 @@ _context_cache = {}
 
 
 def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
-    """Fetch N log lines before and after a given timestamp using GetLogEvents.
+    """Fetch log lines around a given timestamp using GetLogEvents.
+
+    Uses overlapping time windows to ensure logs at the exact same
+    millisecond are not excluded. Returns a simple time-ordered block
+    of context without attempting to pinpoint the exact target line.
 
     Results are memoized per (log_stream, timestamp_ms) to avoid redundant
     API calls when the same log line matches multiple keywords.
@@ -34,37 +38,49 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
         return _context_cache[cache_key]
 
     logs_client = get_logs_client()
-    context = []
 
     try:
-        # Fetch BEFORE the target event (endTime = timestamp_ms)
+        # Fetch BEFORE and INCLUDING the target event
+        # endTime is exclusive in get_log_events, so +1 to include timestamp_ms
         resp_before = logs_client.get_log_events(
             logGroupName=log_group,
             logStreamName=log_stream,
-            endTime=int(timestamp_ms),
-            limit=num_lines + 1,  # +1 in case the target event itself is included
+            endTime=int(timestamp_ms) + 1,
+            limit=num_lines + 10,
             startFromHead=False,
         )
-        for event in resp_before.get("events", []):
-            if event.get("timestamp", 0) < timestamp_ms:
-                context.append(event.get("message", "").rstrip())
+        before_events = [
+            (e.get("timestamp", 0), e.get("message", "").rstrip())
+            for e in resp_before.get("events", [])
+        ]
 
-        # Keep only the last N lines before the target
-        context = context[-num_lines:]
-
-        # Add the target line marker
-        context.append("★ " + "-" * 20 + " ★")
-
-        # Fetch AFTER the target event (startTime = timestamp_ms + 1)
+        # Fetch AFTER and INCLUDING the target event
         resp_after = logs_client.get_log_events(
             logGroupName=log_group,
             logStreamName=log_stream,
-            startTime=int(timestamp_ms) + 1,
-            limit=num_lines,
+            startTime=int(timestamp_ms),
+            limit=num_lines + 10,
             startFromHead=True,
         )
-        for event in resp_after.get("events", []):
-            context.append(event.get("message", "").rstrip())
+        after_events = [
+            (e.get("timestamp", 0), e.get("message", "").rstrip())
+            for e in resp_after.get("events", [])
+        ]
+
+        # Merge and deduplicate by (timestamp, message)
+        seen = set()
+        merged = []
+        for ts, msg in before_events + after_events:
+            key = (ts, msg)
+            if key not in seen:
+                seen.add(key)
+                merged.append((ts, msg))
+
+        # Sort by timestamp
+        merged.sort(key=lambda x: x[0])
+
+        # Extract just the message strings
+        context = [msg for _, msg in merged]
 
         _context_cache[cache_key] = context
         return context

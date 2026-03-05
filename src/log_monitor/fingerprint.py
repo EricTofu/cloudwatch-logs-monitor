@@ -9,8 +9,8 @@ MASKS = [
     (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<UUID>"),
     # IPv4 addresses
     (re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"), "<IP>"),
-    # Timestamps (ISO 8601-like, various formats)
-    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\b"), "<TIMESTAMP>"),
+    # Timestamps (ISO 8601-like, various formats including comma-separated milliseconds)
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[,.]\d+)*(?:Z|[+-]\d{2}:\d{2})?\b"), "<TIMESTAMP>"),
     # Hex numbers often used for addresses/IDs
     (re.compile(r"\b0x[0-9a-fA-F]+\b"), "<HEX>"),
     # Long sequences of digits (IDs, timings, etc)
