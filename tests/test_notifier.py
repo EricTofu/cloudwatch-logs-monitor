@@ -3,6 +3,7 @@
 import json
 
 from log_monitor.notifier import (
+    _split_log_lines_pages,
     build_chatbot_payload,
     build_email_payload,
     render_message,
@@ -138,4 +139,92 @@ class TestBuildPayloads:
     def test_email(self):
         result = build_email_payload("Subject", "Body")
         assert result == "Subject\n\nBody"
+
+
+class TestSplitLogLinesPages:
+    """Tests for _split_log_lines_pages pagination logic."""
+
+    TEMPLATE = {"subject": "{keyword}", "body": "{log_lines}\n---\n{context_lines}"}
+    BASE_VARS = {
+        "display_name": "TestProject",
+        "keyword": "ERROR",
+        "fingerprint": "",
+        "original_message": "",
+        "severity": "WARNING",
+        "count": "10",
+        "detected_at": "2026-01-01 00:00:00 JST",
+        "log_group": "/test/log-group",
+        "stream_name": "stream-1",
+        "mention": "",
+    }
+
+    def test_normal_pagination(self):
+        """Multiple log lines split across pages."""
+        # Create lines that total > 3800 chars after header
+        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * 100 for i in range(30)]
+        context = "── [Context for Log 1] ──\nSome context line"
+        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+
+        assert len(pages) >= 2
+        # Page 1 should have context
+        assert pages[0][1] == context
+        # Page 2+ should say "(see page 1)"
+        for _, ctx in pages[1:]:
+            assert ctx == "(see page 1)"
+
+    def test_page1_body_within_limit(self):
+        """Page 1 rendered body must stay within max_desc (3800)."""
+        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message {i} " + "x" * 100 for i in range(30)]
+        context = "── [Context for Log 1] ──\n" + "Context line\n" * 50
+        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+
+        # Render page 1 and check body length
+        vars_p1 = {**self.BASE_VARS, "log_lines": pages[0][0], "context_lines": pages[0][1]}
+        rendered_p1 = render_message(self.TEMPLATE, vars_p1)
+        assert len(rendered_p1["body"]) <= 3800, (
+            f"Page 1 body is {len(rendered_p1['body'])} chars, exceeds 3800"
+        )
+
+    def test_large_context_truncated_when_exceeds_budget(self):
+        """When context alone exceeds the budget, it should be truncated."""
+        log_lines = ["[1] 2026-01-01T00:00:00  Error message"]
+        huge_context = "X" * 4000  # bigger than max_desc
+        pages = _split_log_lines_pages(log_lines, huge_context, self.TEMPLATE, self.BASE_VARS)
+
+        # Context on page 1 should be truncated
+        assert "truncated" in pages[0][1] or "omitted" in pages[0][1]
+
+        # Rendered body should still be within limit
+        vars_p1 = {**self.BASE_VARS, "log_lines": pages[0][0], "context_lines": pages[0][1]}
+        rendered_p1 = render_message(self.TEMPLATE, vars_p1)
+        assert len(rendered_p1["body"]) <= 3800
+
+    def test_single_page_when_fits(self):
+        """When everything fits in one page, no pagination needed."""
+        log_lines = ["[1] 2026-01-01T00:00:00  Short error"]
+        context = "Brief context"
+        pages = _split_log_lines_pages(log_lines, context, self.TEMPLATE, self.BASE_VARS)
+
+        assert len(pages) == 1
+        assert pages[0][1] == context
+
+    def test_empty_log_lines(self):
+        """Empty log lines should return a single page with '(no log lines)'."""
+        pages = _split_log_lines_pages([], "some context", self.TEMPLATE, self.BASE_VARS)
+        assert len(pages) == 1
+        assert pages[0][0] == "(no log lines)"
+        assert pages[0][1] == "some context"
+
+    def test_small_available_first_preserves_context(self):
+        """When available_first is small but >= 0, context should be fully preserved."""
+        # Use moderate context that leaves only a small budget for log lines
+        moderate_context = "C" * 2500
+        log_lines = [f"[{i}] 2026-01-01T00:00:00  Error message number {i} " + "x" * 80 for i in range(20)]
+        pages = _split_log_lines_pages(log_lines, moderate_context, self.TEMPLATE, self.BASE_VARS)
+
+        # Page 1 context should be the full original context (not truncated)
+        assert pages[0][1] == moderate_context
+        # Should have multiple pages since page 1 has little room for log lines
+        assert len(pages) >= 2
+
 

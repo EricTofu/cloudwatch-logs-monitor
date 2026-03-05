@@ -7,6 +7,7 @@ from datetime import datetime
 from log_monitor.constants import JST, get_ses_client, get_sns_client
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def _resolve_severity(kw_config, monitor_config, global_config):
@@ -288,10 +289,21 @@ def _split_log_lines_pages(log_line_parts, context_text, template, base_variable
     context_cost = len(context_text) if context_text else 0
     available_first = max_desc - header_size - context_cost
     available_rest = max_desc - header_size
-    if available_first < 200:
-        available_first = 2000  # fallback
+    if available_first < 0:
+        # Context alone exceeds budget — truncate context to fit
+        max_context = max_desc - header_size - 200  # reserve 200 for at least 1 log line
+        if max_context > 0:
+            context_text = context_text[:max_context] + "\n…(truncated)"
+            context_cost = len(context_text)
+            available_first = max_desc - header_size - context_cost
+        else:
+            context_text = "(context omitted — too large)"
+            context_cost = len(context_text)
+            available_first = max_desc - header_size - context_cost
+    # available_first may be small (< 200) — that's fine, page 1 will just
+    # have fewer log lines and the rest overflow to subsequent pages.
     if available_rest < 200:
-        available_rest = 2000  # fallback
+        available_rest = 200  # absolute minimum
 
     pages = []
     current_lines = []
