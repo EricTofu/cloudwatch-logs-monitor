@@ -37,19 +37,34 @@ def _get_topic_by_severity(topics_dict, severity):
 def resolve_sns_topic(kw_config, monitor_config, global_config):
     """Resolve Slack SNS topic: KEYWORD → MONITOR → GLOBAL.
 
-    Uses severity to select the appropriate topic.
+    Resolution order:
+    1. kw_config.sns_topic (Force string override)
+    2. kw_config.sns_topics[severity] (Map override)
+    3. monitor_config.sns_topic (Force string override)
+    4. monitor_config.sns_topics[severity] (Map override)
+    5. global_config.sns_topics[severity] (Global default)
     """
     severity = _resolve_severity(kw_config, monitor_config, global_config)
 
-    # 1. Keyword-level override
+    # 1. Keyword-level force override
     if kw_config.get("sns_topic"):
         return kw_config["sns_topic"]
 
-    # 2. MONITOR-level
+    # 2. Keyword-level severity map
+    kw_topic = _get_topic_by_severity(kw_config.get("sns_topics", {}), severity)
+    if kw_topic:
+        return kw_topic
+
+    # 3. MONITOR-level force override
     if monitor_config.get("sns_topic"):
         return monitor_config["sns_topic"]
 
-    # 3. GLOBAL by severity (case-insensitive)
+    # 4. MONITOR-level severity map
+    mon_topic = _get_topic_by_severity(monitor_config.get("sns_topics", {}), severity)
+    if mon_topic:
+        return mon_topic
+
+    # 5. GLOBAL by severity (case-insensitive)
     return _get_topic_by_severity(global_config.get("sns_topics", {}), severity)
 
 

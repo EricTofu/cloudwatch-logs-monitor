@@ -44,11 +44,51 @@ class TestResolveSNSTopic:
         topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
         assert topic == "arn:kw-specific"
 
+    def test_keyword_topics_map(self):
+        kw_config = {
+            "severity": "critical",
+            "sns_topics": {"critical": "arn:kw-critical", "warning": "arn:kw-warning"}
+        }
+        topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
+        assert topic == "arn:kw-critical"
+
+    def test_keyword_override_beats_keyword_topics(self):
+        kw_config = {
+            "severity": "critical",
+            "sns_topic": "arn:kw-force",
+            "sns_topics": {"critical": "arn:kw-critical"}
+        }
+        topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
+        assert topic == "arn:kw-force"
+
     def test_monitor_override(self):
         kw_config = {"severity": "critical"}
         monitor = {"sns_topic": "arn:monitor-specific"}
         topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
         assert topic == "arn:monitor-specific"
+
+    def test_monitor_topics_map(self):
+        kw_config = {"severity": "warning"}
+        monitor = {
+            "sns_topics": {"critical": "arn:mon-critical", "warning": "arn:mon-warning"}
+        }
+        topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
+        assert topic == "arn:mon-warning"
+
+    def test_monitor_override_beats_monitor_topics(self):
+        kw_config = {"severity": "critical"}
+        monitor = {
+            "sns_topic": "arn:mon-force",
+            "sns_topics": {"critical": "arn:mon-critical"}
+        }
+        topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
+        assert topic == "arn:mon-force"
+
+    def test_keyword_beats_monitor(self):
+        kw_config = {"severity": "critical", "sns_topics": {"critical": "arn:kw-critical"}}
+        monitor = {"sns_topics": {"critical": "arn:mon-critical"}}
+        topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
+        assert topic == "arn:kw-critical"
 
     def test_global_fallback(self):
         kw_config = {"severity": "critical"}

@@ -379,13 +379,15 @@ def process_monitor(monitor_id, global_config, search_end_ms):
 
 ## 6. カスタマイズ詳細
 
-### 6.1 通知先の解決（3段階フォールバック）
+### 6.1 通知先の解決（5段階フォールバック）
 
 ```
 Slack通知先:
-  1. MONITOR の override_sns_topic     ← キーワード固有
-  2. PROJECT の override_sns_topics    ← プロジェクト固有
-  3. GLOBAL の sns_topics              ← デフォルト
+  1. KEYWORD の sns_topic              ← 強制指定 (単一ARN)
+  2. KEYWORD の sns_topics             ← キーワード専用の severity マップ
+  3. MONITOR の sns_topic              ← モニター全体の強制指定 (単一ARN)
+  4. MONITOR の sns_topics             ← モニター専用の severity マップ
+  5. GLOBAL の sns_topics              ← システム全体のデフォルト
 
 Email通知先:
   1. MONITOR の ses_config.recipients     ← モニター固有
@@ -395,8 +397,8 @@ Email通知先:
 
 | ケース | Slack通知先 | Email通知先 |
 |--------|-----------|------------|
-| project-a / ERROR (critical) | project-a-critical | GLOBAL ses_config critical |
-| project-a / OOM (critical) | team-b-slack | GLOBAL ses_config critical |
+| project-a / ERROR (critical) | project-a の sns_topics (critical) | GLOBAL ses_config critical |
+| project-a / OOM (critical) | キーワードの sns_topic | GLOBAL ses_config critical |
 | project-b / ERROR (critical) | GLOBAL slack-critical | GLOBAL ses_config critical |
 | project-c / WARN (info) | GLOBAL slack-info | 送信しない (未設定) |
 
@@ -709,9 +711,7 @@ cloudwatch-logs-monitor/
 }
 ```
 
-### キーワード追加 → monitors 配列に要素追加
-
-### プロジェクト固有の通知先 → override_sns_topics を追加
+### プロジェクト固有の通知先 → `sns_topic` または `sns_topics` を追加
 
 ### 一時停止 → `"enabled": false`
 
