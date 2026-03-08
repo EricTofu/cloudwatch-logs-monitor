@@ -139,7 +139,7 @@ def test_handler_integration(aws_credentials):
     # Verify STATE was created for ERROR keyword + fingerprint
     from log_monitor.fingerprint import generate_fingerprint
     fp = generate_fingerprint("ERROR: test error")
-    
+
     resp = table.get_item(Key={"pk": "STATE", "sk": f"project-a#ERROR#{fp}"})
     assert "Item" in resp
     assert resp["Item"]["status"] == "ALARM"
@@ -169,14 +169,17 @@ def test_handler_error_isolation(aws_credentials):
     table.put_item(Item=SAMPLE_MONITOR_A)
     table.put_item(Item=SAMPLE_MONITOR_DAILY)
 
-    with patch("log_monitor.handler.process_monitor") as mock_process:
+    with (
+        patch("log_monitor.handler.start_query", side_effect=["qid1", "qid2"]),
+        patch("log_monitor.handler.poll_queries", return_value={"qid1": [], "qid2": []}),
+        patch("log_monitor.handler.process_monitor_results") as mock_process
+    ):
         mock_process.side_effect = [Exception("boom"), None]
         # Should not raise even if first monitor fails
         handler({"monitor_ids": ["project-a", "project-c-daily"]}, None)
         assert mock_process.call_count == 2
 
     reset_clients()
-
 
 def test_handler_empty_event():
     """No monitor_ids → early return."""
@@ -203,7 +206,7 @@ def test_recovery_with_fingerprints(aws_credentials):
     )
     table.put_item(Item=SAMPLE_GLOBAL_CONFIG)
     table.put_item(Item=SAMPLE_MONITOR_A)
-    
+
     # Pre-seed an ALARM state for a specific fingerprint
     now_ms = 1740000000000
     table.put_item(

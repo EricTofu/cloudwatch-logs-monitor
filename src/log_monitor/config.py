@@ -62,7 +62,7 @@ def get_state(monitor_id, keyword, fingerprint=None, table=None):
 
 def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
     """Fetch all active ALARM fingerprints for a monitor#keyword.
-    
+
     Returns:
         List of fingerprints (or None if no fingerprint) that are currently in ALARM state.
     """

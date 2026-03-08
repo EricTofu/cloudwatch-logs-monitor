@@ -8,22 +8,19 @@ from log_monitor.constants import POLL_INTERVAL_SEC, QUERY_TIMEOUT_SEC, get_logs
 logger = logging.getLogger(__name__)
 
 
-def execute_query(log_group, query_string, search_start_ms, search_end_ms):
-    """Execute a Logs Insights query and return matching results.
+def start_query(log_group, query_string, search_start_ms, search_end_ms):
+    """Start a Logs Insights query and return its queryId.
 
     Args:
         log_group: CloudWatch log group name.
-        query_string: Raw Insights query string (from DynamoDB).
+        query_string: Raw Insights query string.
         search_start_ms: Search start time in epoch milliseconds.
         search_end_ms: Search end time in epoch milliseconds.
 
     Returns:
-        List of result rows, where each row is a list of
-        {"field": name, "value": val} dicts. Returns [] on failure.
+        queryId (str) on success, or None on failure.
     """
     logs_client = get_logs_client()
-
-    # Start the query
     try:
         resp = logs_client.start_query(
             logGroupName=log_group,
@@ -31,31 +28,65 @@ def execute_query(log_group, query_string, search_start_ms, search_end_ms):
             endTime=search_end_ms // 1000,
             queryString=query_string,
         )
-        query_id = resp["queryId"]
+        return resp["queryId"]
     except Exception:
         logger.exception("Failed to start query: log_group=%s", log_group)
+        return None
+
+
+def poll_queries(pending_queries):
+    """Poll multiple Logs Insights queries until they complete or timeout.
+
+    Args:
+        pending_queries: A list of queryIds to poll.
+
+    Returns:
+        A dict of queryId -> list of result rows (same format as execute_query).
+        Queries that fail or timeout will return an empty list [].
+    """
+    logs_client = get_logs_client()
+    results = {query_id: [] for query_id in pending_queries}
+    active_queries = set(pending_queries)
+    deadline = time.time() + QUERY_TIMEOUT_SEC
+
+    while active_queries and time.time() < deadline:
+        time.sleep(POLL_INTERVAL_SEC)
+
+        # We need to copy the set because we might modify it during iteration
+        for query_id in list(active_queries):
+            try:
+                result = logs_client.get_query_results(queryId=query_id)
+                status = result.get("status")
+
+                if status == "Complete":
+                    results[query_id] = result.get("results", [])
+                    active_queries.remove(query_id)
+                elif status in ("Failed", "Cancelled", "Timeout"):
+                    logger.error("Query %s finished with status: %s", query_id, status)
+                    active_queries.remove(query_id)
+                # Running/Scheduled → keep polling
+            except Exception:
+                logger.exception("Failed to get query results: query_id=%s", query_id)
+                active_queries.remove(query_id)
+
+    if active_queries:
+        for qid in active_queries:
+            logger.error("Query %s timed out after %ds", qid, QUERY_TIMEOUT_SEC)
+
+    return results
+
+
+def execute_query(log_group, query_string, search_start_ms, search_end_ms):
+    """Execute a Logs Insights query and return matching results.
+
+    For backwards compatibility or single executions.
+    """
+    query_id = start_query(log_group, query_string, search_start_ms, search_end_ms)
+    if not query_id:
         return []
 
-    # Poll for results
-    deadline = time.time() + QUERY_TIMEOUT_SEC
-    while time.time() < deadline:
-        time.sleep(POLL_INTERVAL_SEC)
-        try:
-            result = logs_client.get_query_results(queryId=query_id)
-            status = result.get("status")
-
-            if status == "Complete":
-                return result.get("results", [])
-            elif status in ("Failed", "Cancelled", "Timeout"):
-                logger.error("Query %s finished with status: %s", query_id, status)
-                return []
-            # Running/Scheduled → keep polling
-        except Exception:
-            logger.exception("Failed to get query results: query_id=%s", query_id)
-            return []
-
-    logger.error("Query %s timed out after %ds", query_id, QUERY_TIMEOUT_SEC)
-    return []
+    results = poll_queries([query_id])
+    return results.get(query_id, [])
 
 
 def dispatch_results(raw_results, keywords_config):

@@ -155,7 +155,9 @@ def build_email_payload(subject, body):
     return f"{subject}\n\n{body}"
 
 
-def send_notification(kw_config, monitor_config, global_config, action, events, keyword, fingerprint=None, original_message=None):
+def send_notification(
+    kw_config, monitor_config, global_config, action, events, keyword, fingerprint=None, original_message=None
+):
     """Orchestrator: resolve topics → render → publish to Slack + Email.
 
     Args:

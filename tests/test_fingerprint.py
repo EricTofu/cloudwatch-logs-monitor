@@ -26,8 +26,7 @@ def test_mask_message():
     assert mask_message(msg5) == "Transaction <NUM> took 500ms"
 
     # Complex masking (all combined)
-    complex_msg = "2026-03-04T12:00:00Z INFO [Thread-12345] Request 123e-4567-etc failed from 10.0.0.1 at 0x123abc"
-    # Note: simple thread IDs or partial UUIDs might not match the specific regex, but the goal is structural similarity.
+    # Note: simple thread IDs or partial UUIDs might not match the regex, but the goal is structural similarity.
 
 def test_generate_fingerprint_consistency():
     msg_a1 = "NullPointerException in user service for user id 12345"
