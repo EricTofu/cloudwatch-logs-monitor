@@ -114,16 +114,18 @@ def test_handler_integration(aws_credentials):
     ses.verify_email_identity(EmailAddress="alerts@example.com")
 
     mock_start_query = MagicMock(return_value={"queryId": "test-query-id"})
-    mock_get_results = MagicMock(return_value={
-        "status": "Complete",
-        "results": [
-            [
-                {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
-                {"field": "@message", "value": "ERROR: test error"},
-                {"field": "@logStream", "value": "project-a/stream-1"},
+    mock_get_results = MagicMock(
+        return_value={
+            "status": "Complete",
+            "results": [
+                [
+                    {"field": "@timestamp", "value": "2026-03-01 10:00:00.000"},
+                    {"field": "@message", "value": "ERROR: test error"},
+                    {"field": "@logStream", "value": "project-a/stream-1"},
+                ],
             ],
-        ],
-    })
+        }
+    )
 
     with (
         patch("log_monitor.query.get_logs_client") as mock_logs_client,
@@ -138,6 +140,7 @@ def test_handler_integration(aws_credentials):
 
     # Verify STATE was created for ERROR keyword + fingerprint
     from log_monitor.fingerprint import generate_fingerprint
+
     fp = generate_fingerprint("ERROR: test error")
 
     resp = table.get_item(Key={"pk": "STATE", "sk": f"project-a#ERROR#{fp}"})
@@ -172,7 +175,7 @@ def test_handler_error_isolation(aws_credentials):
     with (
         patch("log_monitor.handler.start_query", side_effect=["qid1", "qid2"]),
         patch("log_monitor.handler.poll_queries", return_value={"qid1": [], "qid2": []}),
-        patch("log_monitor.handler.process_monitor_results") as mock_process
+        patch("log_monitor.handler.process_monitor_results") as mock_process,
     ):
         mock_process.side_effect = [Exception("boom"), None]
         # Should not raise even if first monitor fails
@@ -180,6 +183,7 @@ def test_handler_error_isolation(aws_credentials):
         assert mock_process.call_count == 2
 
     reset_clients()
+
 
 def test_handler_empty_event():
     """No monitor_ids → early return."""

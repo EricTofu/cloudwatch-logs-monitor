@@ -180,13 +180,13 @@ STATE           project-a#TIMEOUT   Lambda が自動    状態
   "sk": "CONFIG",
 
   "source_log_group": "/aws/app/shared-logs",
-
   "defaults": {
     "severity": "warning",
     "search_window_minutes": 5,
     "schedule_rate_minutes": 5,
     "renotify_min": 60,
     "notify_on_recover": true,
+    "display_timezone": "Asia/Tokyo",
     "context_lines": 5
   },
 

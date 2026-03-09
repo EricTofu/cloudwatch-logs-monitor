@@ -29,6 +29,7 @@
 | `context_lines` | エラーログの前後何行を取得するかのデフォルト行数 |
 | `renotify_min` | 同じエラーが出続けた際、次に再通知を行うまでの待機時間(分)。無効化は `"disabled"` |
 | `notify_on_recover` | エラーが収束した時に回復通知（RECOVER）を送信するかどうか。`true`/`false` |
+| `display_timezone` | 通知メッセージ中のタイムスタンプ表示に使うタイムゾーン。デフォルトは `"Asia/Tokyo"` |
 
 ---
 
@@ -49,6 +50,7 @@
 | `severity` | String | (オプション) モニター全体に適用される深刻度。 | `"critical"` |
 | `renotify_min` | Num/Str| (オプション) 再通知間隔。無効化は `"disabled"` を指定。 | `30` |
 | `notify_on_recover` | Boolean| (オプション) 回復通知のオン・オフ上書き。 | `true` |
+| `display_timezone` | String | (オプション) このモニター専用のタイムスタンプ表示用タイムゾーン。 | `"UTC"` |
 | `mention` | String | (オプション) 通知文の `{mention}` 変数に埋め込まれる宛先（SlackのIDなど）。 | `"<@U12345>"` |
 | `sns_topic` | String | (オプション) グローバルの `sns_topics` を無視して、強制的に送信する SNSトピックARN。 | `"arn:aws:sns:..."` |
 | `sns_topics` | Map | (オプション) モニター専用の深刻度に応じた SNS トピックのマッピング。 | `{"critical": "arn...", "warning": "arn..."}` |

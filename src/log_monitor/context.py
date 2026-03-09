@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 _context_cache = {}
 
 
-def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
+def get_context_lines(log_group, log_stream, timestamp_ms, target_message=None, num_lines=5):
     """Fetch log lines around a given timestamp using GetLogEvents.
 
     Uses overlapping time windows to ensure logs at the exact same
@@ -25,6 +25,7 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
         log_group: Log group name.
         log_stream: Log stream name.
         timestamp_ms: Epoch milliseconds of the detected event.
+        target_message: The exact log message string to find (optional).
         num_lines: Number of context lines to retrieve (each way).
 
     Returns:
@@ -33,7 +34,7 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
     if not log_stream or not timestamp_ms or num_lines <= 0:
         return []
 
-    cache_key = f"{log_stream}|{timestamp_ms}"
+    cache_key = f"{log_stream}|{timestamp_ms}|{hash(target_message)}"
     if cache_key in _context_cache:
         return _context_cache[cache_key]
 
@@ -49,10 +50,7 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
             limit=num_lines + 10,
             startFromHead=False,
         )
-        before_events = [
-            (e.get("timestamp", 0), e.get("message", "").rstrip())
-            for e in resp_before.get("events", [])
-        ]
+        before_events = [(e.get("timestamp", 0), e.get("message", "").rstrip()) for e in resp_before.get("events", [])]
 
         # Fetch AFTER and INCLUDING the target event
         resp_after = logs_client.get_log_events(
@@ -62,10 +60,7 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
             limit=num_lines + 10,
             startFromHead=True,
         )
-        after_events = [
-            (e.get("timestamp", 0), e.get("message", "").rstrip())
-            for e in resp_after.get("events", [])
-        ]
+        after_events = [(e.get("timestamp", 0), e.get("message", "").rstrip()) for e in resp_after.get("events", [])]
 
         # Merge and deduplicate by (timestamp, message)
         seen = set()
@@ -79,8 +74,30 @@ def get_context_lines(log_group, log_stream, timestamp_ms, num_lines=5):
         # Sort by timestamp
         merged.sort(key=lambda x: x[0])
 
-        # Extract just the message strings
-        context = [msg for _, msg in merged]
+        if not merged:
+            return []
+
+        # Find target events based on exact timestamp and optionally message
+        target_ts = int(timestamp_ms)
+        if target_message:
+            target_indices = [i for i, (ts, msg) in enumerate(merged) if ts == target_ts and msg == target_message]
+        else:
+            target_indices = []
+
+        if not target_indices:
+            # Fallback to just timestamp
+            target_indices = [i for i, (ts, _) in enumerate(merged) if ts == target_ts]
+
+        if not target_indices:
+            # Fallback to the closest timestamp
+            closest_i = min(range(len(merged)), key=lambda i: abs(merged[i][0] - target_ts))
+            target_indices = [closest_i]
+
+        start_i = max(0, target_indices[0] - num_lines)
+        end_i = min(len(merged), target_indices[-1] + num_lines + 1)
+
+        # Extract just the message strings within the sliced window
+        context = [msg for _, msg in merged[start_i:end_i]]
 
         _context_cache[cache_key] = context
         return context
@@ -116,13 +133,12 @@ def enrich_with_context(events, monitor_config, global_config):
     for event in events:
         log_stream = event.get("log_stream", "")
         timestamp_str = event.get("timestamp", "")
+        target_message = event.get("message", "").rstrip()
 
         timestamp_ms = _parse_timestamp_ms(timestamp_str)
 
         if timestamp_ms and log_stream:
-            event["context_lines"] = get_context_lines(
-                log_group, log_stream, timestamp_ms, num_lines
-            )
+            event["context_lines"] = get_context_lines(log_group, log_stream, timestamp_ms, target_message, num_lines)
         else:
             event["context_lines"] = []
 

@@ -28,6 +28,7 @@ def test_mask_message():
     # Complex masking (all combined)
     # Note: simple thread IDs or partial UUIDs might not match the regex, but the goal is structural similarity.
 
+
 def test_generate_fingerprint_consistency():
     msg_a1 = "NullPointerException in user service for user id 12345"
     msg_a2 = "NullPointerException in user service for user id 99999"

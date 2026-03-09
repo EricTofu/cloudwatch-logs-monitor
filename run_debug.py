@@ -1,6 +1,7 @@
-import subprocess
 import os
 import signal
+import subprocess
+
 
 def run():
     env = os.environ.copy()
@@ -11,6 +12,7 @@ def run():
     except subprocess.TimeoutExpired:
         print("Timeout! Sending SIGABRT to dump threads...")
         os.kill(proc.pid, signal.SIGABRT)
+
 
 if __name__ == "__main__":
     run()

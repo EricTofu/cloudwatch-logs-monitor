@@ -2,12 +2,40 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from log_monitor.constants import JST, get_ses_client, get_sns_client
+from log_monitor.constants import get_ses_client, get_sns_client
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _format_timestamp(ts_str, tz_name="Asia/Tokyo"):
+    """Convert UTC timestamp string from Insights to target timezone."""
+    if not ts_str:
+        return ts_str
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ):
+        try:
+            dt = datetime.strptime(ts_str, fmt).replace(tzinfo=timezone.utc)
+            try:
+                target_tz = ZoneInfo(tz_name)
+            except ZoneInfoNotFoundError:
+                logger.warning("Timezone %s not found, falling back to Asia/Tokyo", tz_name)
+                target_tz = ZoneInfo("Asia/Tokyo")
+
+            formatted = dt.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S.%f")
+            return formatted[:-3] if "." in formatted else formatted
+        except ValueError:
+            continue
+
+    return ts_str
 
 
 def _resolve_severity(kw_config, monitor_config, global_config):
@@ -174,12 +202,16 @@ def send_notification(
 
     severity = _resolve_severity(kw_config, monitor_config, global_config)
 
+    defaults = global_config.get("defaults", {})
+    tz_name = monitor_config.get("display_timezone") or defaults.get("display_timezone") or "Asia/Tokyo"
+
     # Build per-log entries: (log_line_str, context_str)
     log_entries = []
     for i, e in enumerate(events[:50], 1):
         ts = e.get("timestamp", "")
+        formatted_ts = _format_timestamp(ts, tz_name)
         msg = e.get("message", "").rstrip()
-        log_line = f"[{i}] {ts}  {msg}"
+        log_line = f"[{i}] {formatted_ts}  {msg}"
 
         # Context only for first 5 events
         ctx_str = ""
@@ -195,6 +227,11 @@ def send_notification(
     # Stream names
     stream_names = list({e.get("log_stream", "") for e in events})
 
+    try:
+        target_tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        target_tz = ZoneInfo("Asia/Tokyo")
+
     # Base variables (shared across pages)
     base_variables = {
         "display_name": monitor_config.get("display_name", monitor_config.get("sk", "")),
@@ -203,7 +240,7 @@ def send_notification(
         "original_message": original_message or "",
         "severity": severity.upper(),
         "count": str(len(events)),
-        "detected_at": datetime.now(tz=JST).strftime("%Y-%m-%d %H:%M:%S JST"),
+        "detected_at": datetime.now(tz=target_tz).strftime(f"%Y-%m-%d %H:%M:%S {tz_name}"),
         "log_group": monitor_config.get("log_group", ""),
         "stream_name": "\n".join(stream_names[:3]),
         "mention": monitor_config.get("mention", kw_config.get("mention", "")),
@@ -240,14 +277,15 @@ def send_notification(
                 )
                 logger.info(
                     "Slack notification sent: topic=%s, keyword=%s, page=%d/%d",
-                    slack_topic, keyword, page_num, total_pages,
+                    slack_topic,
+                    keyword,
+                    page_num,
+                    total_pages,
                 )
             except Exception:
                 logger.exception("Failed to send Slack notification: topic=%s", slack_topic)
     else:
-        logger.warning(
-            "No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword
-        )
+        logger.warning("No Slack SNS topic found: severity=%s, keyword=%s", severity, keyword)
 
     # ── Email notification (SES) ──
     ses_recipients = resolve_ses_recipients(kw_config, monitor_config, global_config)
@@ -280,14 +318,18 @@ def send_notification(
             )
             logger.info(
                 "SES email sent: from=%s, to=%s, keyword=%s",
-                ses_from, ses_recipients, keyword,
+                ses_from,
+                ses_recipients,
+                keyword,
             )
         except Exception:
             logger.exception("Failed to send SES email: from=%s, to=%s", ses_from, ses_recipients)
     else:
         logger.warning(
             "No SES email config found: recipients=%s, from=%s, keyword=%s",
-            ses_recipients, ses_from, keyword,
+            ses_recipients,
+            ses_from,
+            keyword,
         )
 
 
@@ -311,8 +353,8 @@ def _split_log_lines_pages(log_entries, template, base_variables):
         available = 200  # absolute minimum
 
     pages = []
-    current_lines = []   # log line strings for current page
-    current_ctxs = []    # context strings for current page
+    current_lines = []  # log line strings for current page
+    current_ctxs = []  # context strings for current page
     current_len = 0
 
     for log_line, ctx_str in log_entries:
@@ -323,10 +365,12 @@ def _split_log_lines_pages(log_entries, template, base_variables):
 
         # If adding this entry would exceed the budget, flush current page
         if current_len + entry_cost > available and current_lines:
-            pages.append((
-                "\n".join(current_lines),
-                "\n".join(c for c in current_ctxs if c) or "",
-            ))
+            pages.append(
+                (
+                    "\n".join(current_lines),
+                    "\n".join(c for c in current_ctxs if c) or "",
+                )
+            )
             current_lines = []
             current_ctxs = []
             current_len = 0
@@ -347,13 +391,14 @@ def _split_log_lines_pages(log_entries, template, base_variables):
 
     # Flush remaining entries
     if current_lines:
-        pages.append((
-            "\n".join(current_lines),
-            "\n".join(c for c in current_ctxs if c) or "",
-        ))
+        pages.append(
+            (
+                "\n".join(current_lines),
+                "\n".join(c for c in current_ctxs if c) or "",
+            )
+        )
 
     if not pages:
         pages.append(("(no log lines)", ""))
 
     return pages
-

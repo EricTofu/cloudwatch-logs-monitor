@@ -45,19 +45,12 @@ class TestResolveSNSTopic:
         assert topic == "arn:kw-specific"
 
     def test_keyword_topics_map(self):
-        kw_config = {
-            "severity": "critical",
-            "sns_topics": {"critical": "arn:kw-critical", "warning": "arn:kw-warning"}
-        }
+        kw_config = {"severity": "critical", "sns_topics": {"critical": "arn:kw-critical", "warning": "arn:kw-warning"}}
         topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
         assert topic == "arn:kw-critical"
 
     def test_keyword_override_beats_keyword_topics(self):
-        kw_config = {
-            "severity": "critical",
-            "sns_topic": "arn:kw-force",
-            "sns_topics": {"critical": "arn:kw-critical"}
-        }
+        kw_config = {"severity": "critical", "sns_topic": "arn:kw-force", "sns_topics": {"critical": "arn:kw-critical"}}
         topic = resolve_sns_topic(kw_config, {}, GLOBAL_CONFIG)
         assert topic == "arn:kw-force"
 
@@ -69,18 +62,13 @@ class TestResolveSNSTopic:
 
     def test_monitor_topics_map(self):
         kw_config = {"severity": "warning"}
-        monitor = {
-            "sns_topics": {"critical": "arn:mon-critical", "warning": "arn:mon-warning"}
-        }
+        monitor = {"sns_topics": {"critical": "arn:mon-critical", "warning": "arn:mon-warning"}}
         topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
         assert topic == "arn:mon-warning"
 
     def test_monitor_override_beats_monitor_topics(self):
         kw_config = {"severity": "critical"}
-        monitor = {
-            "sns_topic": "arn:mon-force",
-            "sns_topics": {"critical": "arn:mon-critical"}
-        }
+        monitor = {"sns_topic": "arn:mon-force", "sns_topics": {"critical": "arn:mon-critical"}}
         topic = resolve_sns_topic(kw_config, monitor, GLOBAL_CONFIG)
         assert topic == "arn:mon-force"
 
@@ -235,13 +223,12 @@ class TestSplitLogLinesPages:
         for log_lines_str, ctx_str in pages:
             # Extract log numbers from log lines on this page
             import re
+
             log_nums = re.findall(r"\[(\d+)\]", log_lines_str)
             # Each context header should match a log on this page
             ctx_nums = re.findall(r"Context for Log (\d+)", ctx_str)
             for cn in ctx_nums:
-                assert cn in log_nums, (
-                    f"Context for Log {cn} on page without its log body"
-                )
+                assert cn in log_nums, f"Context for Log {cn} on page without its log body"
 
     def test_page_body_within_limit(self):
         """Each page rendered body must stay within max_desc (3800)."""
@@ -251,9 +238,7 @@ class TestSplitLogLinesPages:
         for page_log_lines, page_ctx in pages:
             vars_p = {**self.BASE_VARS, "log_lines": page_log_lines, "context_lines": page_ctx}
             rendered = render_message(self.TEMPLATE, vars_p)
-            assert len(rendered["body"]) <= 3800, (
-                f"Page body is {len(rendered['body'])} chars, exceeds 3800"
-            )
+            assert len(rendered["body"]) <= 3800, f"Page body is {len(rendered['body'])} chars, exceeds 3800"
 
     def test_large_context_truncated(self):
         """When a single entry's context exceeds the page budget, it should be truncated."""
@@ -295,11 +280,10 @@ class TestSplitLogLinesPages:
         # Logs 4+ should never have context headers
         for log_lines_str, ctx_str in pages:
             import re
+
             log_nums = set(re.findall(r"\[(\d+)\]", log_lines_str))
             ctx_nums = set(re.findall(r"Context for Log (\d+)", ctx_str))
             # Only logs 1-3 can have context
             for cn in ctx_nums:
                 assert int(cn) <= 3
                 assert cn in log_nums
-
-

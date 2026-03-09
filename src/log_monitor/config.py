@@ -69,9 +69,7 @@ def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
     table = _get_table(table)
     sk_prefix = f"{monitor_id}#{keyword}"
 
-    resp = table.query(
-        KeyConditionExpression=Key("pk").eq("STATE") & Key("sk").begins_with(sk_prefix)
-    )
+    resp = table.query(KeyConditionExpression=Key("pk").eq("STATE") & Key("sk").begins_with(sk_prefix))
 
     active_fingerprints = []
     for item in resp.get("Items", []):
@@ -80,7 +78,7 @@ def get_active_alarm_fingerprints(monitor_id, keyword, table=None):
             if sk == sk_prefix:
                 active_fingerprints.append(None)
             elif sk.startswith(sk_prefix + "#"):
-                fp = sk[len(sk_prefix) + 1:]
+                fp = sk[len(sk_prefix) + 1 :]
                 active_fingerprints.append(fp)
 
     return active_fingerprints
@@ -189,14 +187,9 @@ def merge_defaults(config, global_config):
     """
     defaults = global_config.get("defaults", {})
     return {
-        "search_window_minutes": (
-            config.get("search_window_minutes")
-            or defaults.get("search_window_minutes", 7)
-        ),
+        "search_window_minutes": (config.get("search_window_minutes") or defaults.get("search_window_minutes", 7)),
         "context_lines": (
-            config.get("context_lines")
-            if config.get("context_lines") is not None
-            else defaults.get("context_lines", 5)
+            config.get("context_lines") if config.get("context_lines") is not None else defaults.get("context_lines", 5)
         ),
         "renotify_min": defaults.get("renotify_min", 60),
         "notify_on_recover": (
@@ -205,4 +198,5 @@ def merge_defaults(config, global_config):
             else defaults.get("notify_on_recover", True)
         ),
         "severity": defaults.get("severity", "warning"),
+        "display_timezone": (config.get("display_timezone") or defaults.get("display_timezone") or "Asia/Tokyo"),
     }
