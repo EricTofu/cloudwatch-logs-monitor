@@ -30,8 +30,7 @@ def _format_timestamp(ts_str, tz_name="Asia/Tokyo"):
                 logger.warning("Timezone %s not found, falling back to Asia/Tokyo", tz_name)
                 target_tz = ZoneInfo("Asia/Tokyo")
 
-            formatted = dt.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S.%f")
-            return formatted[:-3] if "." in formatted else formatted
+            return dt.astimezone(target_tz).isoformat(timespec="milliseconds")
         except ValueError:
             continue
 
@@ -240,7 +239,7 @@ def send_notification(
         "original_message": original_message or "",
         "severity": severity.upper(),
         "count": str(len(events)),
-        "detected_at": datetime.now(tz=target_tz).strftime(f"%Y-%m-%d %H:%M:%S {tz_name}"),
+        "detected_at": datetime.now(tz=target_tz).isoformat(timespec="seconds"),
         "log_group": monitor_config.get("log_group", ""),
         "stream_name": "\n".join(stream_names[:3]),
         "mention": monitor_config.get("mention", kw_config.get("mention", "")),

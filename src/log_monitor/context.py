@@ -1,6 +1,8 @@
 """Context line retrieval from CloudWatch Logs via GetLogEvents."""
 
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from log_monitor.constants import get_logs_client
 
@@ -11,7 +13,17 @@ logger = logging.getLogger(__name__)
 _context_cache = {}
 
 
-def get_context_lines(log_group, log_stream, timestamp_ms, target_message=None, num_lines=5):
+def _format_epoch_ms(ts_ms, tz_name="Asia/Tokyo"):
+    try:
+        target_tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        target_tz = ZoneInfo("Asia/Tokyo")
+
+    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(target_tz)
+    return f"[{dt.isoformat(timespec='milliseconds')}]"
+
+
+def get_context_lines(log_group, log_stream, timestamp_ms, target_message=None, num_lines=5, tz_name="Asia/Tokyo"):
     """Fetch log lines around a given timestamp using GetLogEvents.
 
     Uses overlapping time windows to ensure logs at the exact same
@@ -27,6 +39,7 @@ def get_context_lines(log_group, log_stream, timestamp_ms, target_message=None, 
         timestamp_ms: Epoch milliseconds of the detected event.
         target_message: The exact log message string to find (optional).
         num_lines: Number of context lines to retrieve (each way).
+        tz_name: Timezone for prefixing context line timestamps.
 
     Returns:
         List of log message strings.
@@ -96,8 +109,8 @@ def get_context_lines(log_group, log_stream, timestamp_ms, target_message=None, 
         start_i = max(0, target_indices[0] - num_lines)
         end_i = min(len(merged), target_indices[-1] + num_lines + 1)
 
-        # Extract just the message strings within the sliced window
-        context = [msg for _, msg in merged[start_i:end_i]]
+        # Extract the message strings within the sliced window and prepend formatted timestamp
+        context = [f"{_format_epoch_ms(ts, tz_name)} {msg}" for ts, msg in merged[start_i:end_i]]
 
         _context_cache[cache_key] = context
         return context
@@ -128,6 +141,7 @@ def enrich_with_context(events, monitor_config, global_config):
         if monitor_config.get("context_lines") is not None
         else defaults.get("context_lines", 5)
     )
+    tz_name = monitor_config.get("display_timezone") or defaults.get("display_timezone") or "Asia/Tokyo"
     log_group = monitor_config.get("log_group")
 
     for event in events:
@@ -138,7 +152,9 @@ def enrich_with_context(events, monitor_config, global_config):
         timestamp_ms = _parse_timestamp_ms(timestamp_str)
 
         if timestamp_ms and log_stream:
-            event["context_lines"] = get_context_lines(log_group, log_stream, timestamp_ms, target_message, num_lines)
+            event["context_lines"] = get_context_lines(
+                log_group, log_stream, timestamp_ms, target_message, num_lines, tz_name
+            )
         else:
             event["context_lines"] = []
 
