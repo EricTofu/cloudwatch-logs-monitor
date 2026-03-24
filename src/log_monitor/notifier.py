@@ -212,14 +212,13 @@ def send_notification(
         msg = e.get("message", "").rstrip()
         log_line = f"[{i}] {formatted_ts}  {msg}"
 
-        # Context only for first 5 events
+        # Context for events
         ctx_str = ""
-        if i <= 5:
-            ctx_lines = e.get("context_lines", [])
-            if ctx_lines:
-                ctx_parts = [f"── [Context for Log {i}] ──"]
-                ctx_parts.extend(ctx_lines)
-                ctx_str = "\n".join(ctx_parts)
+        ctx_lines = e.get("context_lines", [])
+        if ctx_lines:
+            ctx_parts = [f"── [Context for Log {i}] ──"]
+            ctx_parts.extend(ctx_lines)
+            ctx_str = "\n".join(ctx_parts)
 
         log_entries.append((log_line, ctx_str))
 
@@ -374,13 +373,18 @@ def _split_log_lines_pages(log_entries, template, base_variables):
             current_ctxs = []
             current_len = 0
 
-        # If a single entry exceeds the full page budget, truncate its context
+        # If a single entry exceeds the full page budget, truncate its context or log line
         if entry_cost > available and not current_lines:
-            max_ctx = available - len(log_line) - 50  # reserve room
-            if max_ctx > 0 and ctx_str:
-                ctx_str = ctx_str[:max_ctx] + "\n…(truncated)"
-            elif ctx_str:
-                ctx_str = ""  # drop context entirely
+            max_log = available - 100
+            if len(log_line) > max_log and max_log > 0:
+                log_line = log_line[:max_log] + "\n…(log truncated)"
+                ctx_str = ""
+            else:
+                max_ctx = available - len(log_line) - 50  # reserve room
+                if max_ctx > 0 and ctx_str:
+                    ctx_str = ctx_str[:max_ctx] + "\n…(truncated)"
+                elif ctx_str:
+                    ctx_str = ""  # drop context entirely
             entry_cost = len(log_line) + 1 + (len(ctx_str) + 1 if ctx_str else 0)
 
         current_lines.append(log_line)
